@@ -8,6 +8,7 @@ echo    轻记 · 打包 Windows 安装包
 echo ============================================
 echo.
 
+REM ---- check Node.js ----
 where node >nul 2>nul
 if errorlevel 1 (
   echo [错误] 没有检测到 Node.js。
@@ -18,18 +19,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM 检查本机 Windows 版 Electron 是否就绪。
-REM 若 node_modules 是从别的电脑（比如 Mac）拷来的，这里不会有 electron.exe，需要清理重装。
+REM ---- use China mirror so Electron / builder binaries download fast ----
+set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
+set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
+
+REM ---- install deps if local Windows Electron is missing (also heals node_modules copied from another OS) ----
 if not exist "node_modules\electron\dist\electron.exe" (
   if exist "node_modules" (
-    echo 检测到 node_modules 不是在本机安装的（可能是从别的电脑拷来的），
-    echo 正在清理后重新安装本机依赖，请稍候……
+    echo 检测到 node_modules 不是本机安装的，正在清理后重装……
     rmdir /s /q node_modules
   ) else (
     echo 正在安装依赖，请稍候……
   )
   echo.
-  call npm install
+  call npm install --registry=https://registry.npmmirror.com
   if errorlevel 1 (
     echo.
     echo [错误] 依赖安装失败，请检查网络后重试。
@@ -39,7 +42,7 @@ if not exist "node_modules\electron\dist\electron.exe" (
 )
 
 echo 正在打包 Windows 安装程序……
-echo 首次打包会下载 Electron 运行时，可能需要几分钟，请耐心等待，不要关闭窗口。
+echo 首次打包会下载运行时，请耐心等待，不要关闭窗口。
 echo.
 call npm run build:win
 if errorlevel 1 (
@@ -51,10 +54,8 @@ if errorlevel 1 (
 
 echo.
 echo ============================================
-echo    打包完成！
-echo    安装包在 dist 文件夹里，文件名形如：
+echo    打包完成！安装包在 dist 文件夹里：
 echo        轻记 Setup 1.0.0.exe
-echo    双击它即可在 Windows 上安装。
 echo ============================================
 echo.
 if exist dist explorer dist

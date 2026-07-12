@@ -78,7 +78,19 @@ body {
   grid-template-columns: 216px 300px 1fr;
   height: 100vh;
   width: 100vw;
+  transition: grid-template-columns 0.22s ease;
 }
+/* 收起边栏：文件夹栏宽度归零，编辑区变宽 */
+.app.sidebar-collapsed {
+  grid-template-columns: 0 300px 1fr;
+}
+.app.sidebar-collapsed .sidebar {
+  opacity: 0;
+  pointer-events: none;
+}
+.sidebar { transition: opacity 0.16s ease; }
+/* 初次加载时不要播放动画 */
+.app.no-anim, .app.no-anim .sidebar { transition: none; }
 
 /* 自定义滚动条 */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
@@ -98,6 +110,7 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-width: 0;   /* 允许收起时网格轨道把它压到 0 宽（否则默认 min-width:auto 会撑住内容）*/
 }
 
 .sidebar-top {
@@ -224,6 +237,20 @@ body {
   padding-top: 26px;
   -webkit-app-region: drag;
 }
+.lh-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  -webkit-app-region: drag;
+}
+.sidebar-toggle {
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+.sidebar-toggle:hover { color: var(--accent-strong); }
+.sidebar-toggle.active { color: var(--accent-strong); background: var(--hover-strong); }
 .list-title {
   font-size: 20px;
   font-weight: 700;
@@ -231,6 +258,7 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
 }
 .new-note-btn { -webkit-app-region: no-drag; }
 

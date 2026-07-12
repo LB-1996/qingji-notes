@@ -28,6 +28,8 @@
   const toast = $('toast');
   const themeBtn = $('themeBtn');
   const themeLabel = $('themeLabel');
+  const appEl = $('app');
+  const sidebarToggle = $('sidebarToggle');
 
   // ---------- 工具函数 ----------
   const now = () => Date.now();
@@ -126,6 +128,14 @@
     const next = (document.documentElement.getAttribute('data-theme') === 'dark') ? 'light' : 'dark';
     localStorage.setItem('qingji-theme', next);
     applyTheme(next);
+  }
+
+  // ---------- 边栏收起 / 展开 ----------
+  function toggleSidebar(force) {
+    const collapsed = typeof force === 'boolean' ? force : !appEl.classList.contains('sidebar-collapsed');
+    appEl.classList.toggle('sidebar-collapsed', collapsed);
+    sidebarToggle.classList.toggle('active', collapsed);
+    localStorage.setItem('qingji-sidebar', collapsed ? '1' : '0');
   }
 
   // ---------- 渲染：文件夹 ----------
@@ -650,6 +660,9 @@
     // 主题
     themeBtn.addEventListener('click', toggleTheme);
 
+    // 边栏收起 / 展开
+    sidebarToggle.addEventListener('click', () => toggleSidebar());
+
     // 工具栏：mousedown 阻止默认，保住编辑器选区
     toolbar.addEventListener('mousedown', (e) => {
       if (e.target.closest('.tb-btn') || e.target.closest('.popover')) e.preventDefault();
@@ -723,6 +736,8 @@
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { hideContextMenu(); hidePopover(); }
+      // Ctrl/Cmd + \ 收起/展开边栏（Electron 与浏览器都可用，无菜单冲突）
+      if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
     });
 
     // 快捷键：浏览器预览时用 keydown；Electron 里交给原生菜单以免重复触发
@@ -802,6 +817,14 @@
   // ---------- 启动 ----------
   async function init() {
     applyTheme(currentTheme());
+    // 恢复边栏收起状态（加载时不播放动画，避免闪一下）
+    appEl.classList.add('no-anim');
+    if (localStorage.getItem('qingji-sidebar') === '1') {
+      appEl.classList.add('sidebar-collapsed');
+      sidebarToggle.classList.add('active');
+    }
+    requestAnimationFrame(() => requestAnimationFrame(() => appEl.classList.remove('no-anim')));
+
     data = await Storage.load();
     if (!data.folders) data.folders = [];
     if (!data.notes) data.notes = [];
