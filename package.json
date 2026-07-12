@@ -1,0 +1,52 @@
+{
+  "name": "qingji-notes",
+  "version": "1.0.0",
+  "description": "轻记 — 一个类似苹果备忘录的桌面笔记应用（Windows / macOS）",
+  "main": "src/main/main.js",
+  "author": "",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "prepare-icon": "node scripts/prepare-icon.js",
+    "build:win": "node scripts/prepare-icon.js && electron-builder --win",
+    "build:mac": "node scripts/prepare-icon.js && electron-builder --mac",
+    "build": "node scripts/prepare-icon.js && electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.qingji.notes",
+    "productName": "轻记",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "logo.ico",
+      "logo.png"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "轻记"
+    },
+    "mac": {
+      "target": "dmg"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+name: Build Windows Installer
+
+# 在 Windows 云端机器上打包出 .exe 安装程序，
+# 只有 Mac 的人也能拿到 Windows 版本。
+on:
+  workflow_dispatch:        # 手动在 Actions 页面点 Run workflow
+  push:
+    tags:
+      - 'v*'                # 打 tag（如 v1.0.0）时自动构建
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 打包 Windows 安装程序
+        run: npm run build:win
+
+      - name: 上传安装包
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/*.exe
