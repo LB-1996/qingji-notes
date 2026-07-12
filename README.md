@@ -37,7 +37,8 @@
 | 我想做什么 | Windows 双击 | Mac 双击 |
 |---|---|---|
 | **运行应用** | `启动.bat` | `启动-Mac.command` |
-| **拉取 GitHub 最新代码并运行** | `更新并启动.bat` | —— |
+| **拉取最新代码并运行** | `更新并启动.bat` | —— |
+| **拉取最新代码并打包安装包** | `更新并打包.bat` | —— |
 | **打包成 Windows 安装包** | `打包Windows安装包.bat` | —— |
 
 > 用 `更新并启动.bat` 需要先装 [Git](https://git-scm.com/download/win)，并用 `git clone https://github.com/LB-1996/qingji-notes.git` 把项目拉下来一次；之后每次双击它就会自动拉取最新代码再启动。
