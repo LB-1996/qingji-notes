@@ -30,6 +30,7 @@
   const themeLabel = $('themeLabel');
   const appEl = $('app');
   const sidebarToggle = $('sidebarToggle');
+  const listResizer = $('listResizer');
 
   // ---------- 工具函数 ----------
   const now = () => Date.now();
@@ -663,6 +664,34 @@
     // 边栏收起 / 展开
     sidebarToggle.addEventListener('click', () => toggleSidebar());
 
+    // 拖动分隔线调整列表宽度（编辑区自动填充剩余空间）
+    const LIST_MIN = 240, LIST_MAX = 640;
+    let resizing = false;
+    listResizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      resizing = true;
+      appEl.classList.add('resizing');
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!resizing) return;
+      const left = listPaneEl.getBoundingClientRect().left;
+      let w = Math.round(e.clientX - left);
+      w = Math.max(LIST_MIN, Math.min(LIST_MAX, w));
+      appEl.style.setProperty('--list-w', w + 'px');
+    });
+    window.addEventListener('mouseup', () => {
+      if (!resizing) return;
+      resizing = false;
+      appEl.classList.remove('resizing');
+      const w = appEl.style.getPropertyValue('--list-w');
+      if (w) localStorage.setItem('qingji-listw', w.trim());
+    });
+    // 双击分隔线恢复默认宽度
+    listResizer.addEventListener('dblclick', () => {
+      appEl.style.removeProperty('--list-w');
+      localStorage.removeItem('qingji-listw');
+    });
+
     // 工具栏：mousedown 阻止默认，保住编辑器选区
     toolbar.addEventListener('mousedown', (e) => {
       if (e.target.closest('.tb-btn') || e.target.closest('.popover')) e.preventDefault();
@@ -823,6 +852,9 @@
       appEl.classList.add('sidebar-collapsed');
       sidebarToggle.classList.add('active');
     }
+    // 恢复上次拖动的列表宽度
+    const savedListW = localStorage.getItem('qingji-listw');
+    if (savedListW) appEl.style.setProperty('--list-w', savedListW);
     requestAnimationFrame(() => requestAnimationFrame(() => appEl.classList.remove('no-anim')));
 
     data = await Storage.load();

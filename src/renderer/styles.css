@@ -75,14 +75,14 @@ body {
 
 .app {
   display: grid;
-  grid-template-columns: 216px 300px 1fr;
+  grid-template-columns: 216px var(--list-w, 300px) 1fr;
   height: 100vh;
   width: 100vw;
   transition: grid-template-columns 0.22s ease;
 }
 /* 收起边栏：文件夹栏宽度归零，编辑区变宽 */
 .app.sidebar-collapsed {
-  grid-template-columns: 0 300px 1fr;
+  grid-template-columns: 0 var(--list-w, 300px) 1fr;
 }
 .app.sidebar-collapsed .sidebar {
   opacity: 0;
@@ -91,6 +91,32 @@ body {
 .sidebar { transition: opacity 0.16s ease; }
 /* 初次加载时不要播放动画 */
 .app.no-anim, .app.no-anim .sidebar { transition: none; }
+/* 拖动分隔线时关闭动画、禁止选中文本 */
+.app.resizing { transition: none; user-select: none; -webkit-user-select: none; cursor: col-resize; }
+
+/* 列表 / 编辑器 之间的可拖动分隔线（位于编辑区左边缘，自动跟随网格）*/
+.col-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 9px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 40;
+  -webkit-app-region: no-drag;
+}
+.col-resizer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.col-resizer:hover::before,
+.app.resizing .col-resizer::before { background: var(--accent-strong); }
 
 /* 自定义滚动条 */
 ::-webkit-scrollbar { width: 9px; height: 9px; }
@@ -460,13 +486,13 @@ body {
   flex: 1;
   overflow-y: auto;
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;   /* 左对齐：内容贴着左侧，随宽度自适应，不再死居中 */
 }
 
 .editor {
   width: 100%;
-  max-width: 720px;
-  padding: 26px 40px 120px;
+  max-width: 1080px;   /* 大屏上用更宽的空间，同时封顶保证长行不至于太宽影响阅读 */
+  padding: 28px 56px 120px;
   outline: none;
   font-size: 16px;
   line-height: 1.6;
