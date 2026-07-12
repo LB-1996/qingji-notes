@@ -37,7 +37,10 @@
 | 我想做什么 | Windows 双击 | Mac 双击 |
 |---|---|---|
 | **运行应用** | `启动.bat` | `启动-Mac.command` |
+| **拉取 GitHub 最新代码并运行** | `更新并启动.bat` | —— |
 | **打包成 Windows 安装包** | `打包Windows安装包.bat` | —— |
+
+> 用 `更新并启动.bat` 需要先装 [Git](https://git-scm.com/download/win)，并用 `git clone https://github.com/LB-1996/qingji-notes.git` 把项目拉下来一次；之后每次双击它就会自动拉取最新代码再启动。
 
 > ⚠️ **换电脑传输时，不要拷贝 `node_modules` 文件夹**：它跟操作系统绑定（含各系统专属的二进制和符号链接），跨系统会解压报错、无法启动。只传源码即可，脚本会在新电脑上自动重装依赖；若已误拷，启动脚本也会自动识别并清理重装。
 
