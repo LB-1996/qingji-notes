@@ -126,16 +126,29 @@ const Editor = (() => {
     restoreSelection();
     const sel = window.getSelection();
     if (sel.rangeCount) {
-      // 先抹掉相关块级元素及其后代上的 style（复制标题带进来的字号/加粗都在这里）
-      topLevelBlocksInRange(sel.getRangeAt(0)).forEach((block) => {
-        block.removeAttribute('style');
-        block.querySelectorAll('[style]').forEach((n) => n.removeAttribute('style'));
-      });
+      // 先把相关块级元素及其后代里影响字号/样式的东西全清掉（复制标题带进来的都在这）
+      topLevelBlocksInRange(sel.getRangeAt(0)).forEach(cleanBlockFormatting);
     }
     document.execCommand('removeFormat');            // 再清内联加粗/颜色等
     document.execCommand('formatBlock', false, 'DIV');
     saveSelection();
     onChange();
+  }
+
+  // 清掉一个块（含后代）里所有会影响字号/外观的东西：style / size / color / face 属性、<font> 标签
+  function cleanBlockFormatting(block) {
+    [block, ...block.querySelectorAll('*')].forEach((n) => {
+      if (!n.removeAttribute) return;
+      n.removeAttribute('style');
+      n.removeAttribute('size');
+      n.removeAttribute('color');
+      n.removeAttribute('face');
+    });
+    block.querySelectorAll('font').forEach((f) => {
+      const frag = document.createDocumentFragment();
+      while (f.firstChild) frag.appendChild(f.firstChild);
+      f.replaceWith(frag);
+    });
   }
 
   // 从节点向上找到编辑器的直接子块
