@@ -363,7 +363,7 @@
     let folderId = null;
     if (view.folderId !== SPECIAL.ALL && view.folderId !== SPECIAL.TRASH) folderId = view.folderId;
     const note = {
-      id: genId('n'), folderId, content: '',
+      id: genId('n'), folderId, content: '<div><br></div>',
       pinned: false, trashed: false,
       createdAt: now(), updatedAt: now()
     };
@@ -542,6 +542,31 @@
         const url = await processImage(file);
         Editor.insertImage(url);
       } catch (e) { console.error(e); }
+    }
+  }
+
+  // 把笔记里的图片复制到系统剪贴板（可粘贴到微信/Word 等别处）
+  async function copyImageToClipboard(img) {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+      if (blob && navigator.clipboard && window.ClipboardItem) {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        showToast('图片已复制，可粘贴到别处');
+        return;
+      }
+      throw new Error('clipboard API 不可用');
+    } catch (e) {
+      // 兜底：选中图片，让用户自己按 Ctrl/⌘+C
+      const range = document.createRange();
+      range.selectNode(img);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      showToast('已选中图片，按 Ctrl/⌘+C 复制');
     }
   }
 
@@ -729,6 +754,20 @@
       const imgs = [];
       for (const it of items) if (it.type && it.type.startsWith('image/')) { const f = it.getAsFile(); if (f) imgs.push(f); }
       if (imgs.length) { e.preventDefault(); await insertImageFiles(imgs); }
+    });
+
+    // 右键图片 → 复制 / 删除
+    Editor.el.addEventListener('contextmenu', (e) => {
+      if (e.target.tagName !== 'IMG') return;
+      e.preventDefault();
+      const img = e.target;
+      const items = [{ label: '复制图片', onClick: () => copyImageToClipboard(img) }];
+      const note = findNote(view.noteId);
+      if (note && !note.trashed) {
+        items.push({ sep: true });
+        items.push({ label: '删除图片', danger: true, onClick: () => { img.remove(); onEditorChange(); } });
+      }
+      showContextMenu(e.clientX, e.clientY, items);
     });
 
     // 拖拽图片到编辑区

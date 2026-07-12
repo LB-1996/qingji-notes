@@ -19,6 +19,7 @@ const Editor = (() => {
     el.innerHTML = html || '';
     savedRange = null;        // 切换笔记后清空旧选区，避免 restoreSelection 用到跨笔记的过期节点
     normalizeLists();         // 顺手修正历史遗留的非法列表嵌套
+    wrapLeadingText();        // 把开头的游离文本包进块，让首行标题样式生效
   }
 
   // ---- 选区保存 / 恢复（点击工具栏、打开文件选择器时会丢失选区）----
@@ -97,6 +98,18 @@ const Editor = (() => {
         p = list.parentNode;
       }
     });
+  }
+
+  // 若内容开头是游离文本 / 内联节点，包进一个 <div>，好让「第一行=标题」的样式生效
+  const BLOCK_RE = /^(DIV|P|H1|H2|H3|H4|UL|OL|LI|BLOCKQUOTE|PRE)$/;
+  function wrapLeadingText() {
+    if (!el.firstChild) return;
+    if (el.firstChild.nodeType === 1 && BLOCK_RE.test(el.firstChild.nodeName)) return; // 已是块级
+    const wrap = document.createElement('div');
+    while (el.firstChild && !(el.firstChild.nodeType === 1 && BLOCK_RE.test(el.firstChild.nodeName))) {
+      wrap.appendChild(el.firstChild);
+    }
+    if (wrap.childNodes.length) el.insertBefore(wrap, el.firstChild);
   }
 
   // ---- 文字块样式：标题 / 大标题 / 小标题 / 正文 ----
@@ -197,8 +210,17 @@ const Editor = (() => {
     try { return document.queryCommandState(cmd); } catch (e) { return false; }
   }
 
-  // ---- 点击圆圈勾选 ----
   el.addEventListener('click', (e) => {
+    // 点击图片 → 选中整张图，方便复制（回收站只读态也允许，好把图复制走）
+    if (e.target.tagName === 'IMG') {
+      const range = document.createRange();
+      range.selectNode(e.target);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      return;
+    }
+    // ---- 点击圆圈勾选 ----
     if (!el.isContentEditable) return;   // 回收站等只读状态下不响应勾选
     const li = e.target.closest('li');
     if (li && li.parentElement && li.parentElement.classList.contains('checklist')) {
