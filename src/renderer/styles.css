@@ -491,7 +491,7 @@ body {
 
 .editor {
   width: 100%;
-  max-width: 1080px;   /* 大屏上用更宽的空间，同时封顶保证长行不至于太宽影响阅读 */
+  max-width: none;   /* 文字铺满整个编辑区宽度，自动适配大小屏 */
   padding: 28px 56px 120px;
   outline: none;
   font-size: 16px;
@@ -523,7 +523,7 @@ body {
 .editor li { margin: 0.15em 0; }
 .editor a { color: #2b8fff; }
 .editor img {
-  max-width: 100%;
+  max-width: min(100%, 620px);   /* 铺满文字的同时，图片保持合理显示大小 */
   height: auto;
   border-radius: 10px;
   margin: 8px 0;
