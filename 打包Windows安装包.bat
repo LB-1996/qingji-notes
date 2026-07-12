@@ -18,8 +18,16 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if not exist "node_modules" (
-  echo 正在安装依赖，请稍候……
+REM 检查本机 Windows 版 Electron 是否就绪。
+REM 若 node_modules 是从别的电脑（比如 Mac）拷来的，这里不会有 electron.exe，需要清理重装。
+if not exist "node_modules\electron\dist\electron.exe" (
+  if exist "node_modules" (
+    echo 检测到 node_modules 不是在本机安装的（可能是从别的电脑拷来的），
+    echo 正在清理后重新安装本机依赖，请稍候……
+    rmdir /s /q node_modules
+  ) else (
+    echo 正在安装依赖，请稍候……
+  )
   echo.
   call npm install
   if errorlevel 1 (
