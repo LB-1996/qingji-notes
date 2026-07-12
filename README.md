@@ -94,7 +94,7 @@ npm run build:win  # 在 Windows 上打包出安装包
 
 | 支付宝 | 微信支付 |
 |:---:|:---:|
-| <img src="docs/sponsor-alipay.png" width="240" alt="支付宝赞赏码" /> | <img src="docs/sponsor-wechat.png" width="240" alt="微信赞赏码" /> |
+| <img src="docs/sponsor-alipay.jpg" width="240" alt="支付宝赞赏码" /> | <img src="docs/sponsor-wechat.jpg" width="240" alt="微信赞赏码" /> |
 
 </div>
 
