@@ -748,12 +748,18 @@
     Editor.el.addEventListener('keyup', updateToolbarState);
     Editor.el.addEventListener('mouseup', updateToolbarState);
 
-    // 粘贴图片
+    // 粘贴：图片 → 插入；富文本 → 清理内联样式后插入（避免把标题字号等带进来）
     Editor.el.addEventListener('paste', async (e) => {
-      const items = (e.clipboardData || {}).items || [];
+      const cd = e.clipboardData;
+      const items = (cd || {}).items || [];
       const imgs = [];
       for (const it of items) if (it.type && it.type.startsWith('image/')) { const f = it.getAsFile(); if (f) imgs.push(f); }
-      if (imgs.length) { e.preventDefault(); await insertImageFiles(imgs); }
+      if (imgs.length) { e.preventDefault(); await insertImageFiles(imgs); return; }
+      const html = cd && cd.getData && cd.getData('text/html');
+      if (html && html.trim()) {
+        e.preventDefault();
+        Editor.insertCleanHTML(html);
+      }
     });
 
     // 右键图片 → 复制 / 删除

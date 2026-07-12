@@ -114,10 +114,72 @@ const Editor = (() => {
 
   // ---- 文字块样式：标题 / 大标题 / 小标题 / 正文 ----
   function setBlock(style) {
-    const map = { title: 'H1', heading: 'H2', subheading: 'H3', body: 'P' };
     if (style === 'numbered') { toggleNumbered(); return; }
-    const tag = map[style] || 'P';
-    exec('formatBlock', tag);
+    if (style === 'body') { setBody(); return; }
+    const map = { title: 'H1', heading: 'H2', subheading: 'H3' };
+    exec('formatBlock', map[style] || 'P');
+  }
+
+  // 正文：彻底清掉内联格式（字号、加粗、颜色等，常见于从标题复制/粘贴带进来的样式），恢复普通段落
+  function setBody() {
+    el.focus();
+    restoreSelection();
+    const sel = window.getSelection();
+    if (sel.rangeCount) {
+      // 先抹掉相关块级元素及其后代上的 style（复制标题带进来的字号/加粗都在这里）
+      topLevelBlocksInRange(sel.getRangeAt(0)).forEach((block) => {
+        block.removeAttribute('style');
+        block.querySelectorAll('[style]').forEach((n) => n.removeAttribute('style'));
+      });
+    }
+    document.execCommand('removeFormat');            // 再清内联加粗/颜色等
+    document.execCommand('formatBlock', false, 'DIV');
+    saveSelection();
+    onChange();
+  }
+
+  // 从节点向上找到编辑器的直接子块
+  function topLevelBlock(node) {
+    while (node && node.parentNode !== el) node = node.parentNode;
+    return (node && node.parentNode === el) ? node : null;
+  }
+  // 选区跨越的所有顶层块（从起点块沿兄弟走到终点块，避开 intersectsNode 的不稳定）
+  function topLevelBlocksInRange(range) {
+    const blocks = [];
+    const start = topLevelBlock(range.startContainer);
+    const end = topLevelBlock(range.endContainer);
+    let cur = start;
+    while (cur) {
+      blocks.push(cur);
+      if (cur === end) break;
+      cur = cur.nextElementSibling;
+    }
+    return blocks;
+  }
+
+  // 清理粘贴进来的富文本：去掉字号/颜色/字体等内联样式（保留 b/i/u/列表等结构），
+  // 从根上避免把大标题字体等带进来
+  function insertCleanHTML(html) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html || '';
+    tmp.querySelectorAll('*').forEach((n) => {
+      n.removeAttribute('style');
+      n.removeAttribute('class');
+      n.removeAttribute('face');
+      n.removeAttribute('color');
+      n.removeAttribute('size');
+      n.removeAttribute('align');
+    });
+    tmp.querySelectorAll('font').forEach((f) => {
+      const frag = document.createDocumentFragment();
+      while (f.firstChild) frag.appendChild(f.firstChild);
+      f.replaceWith(frag);
+    });
+    el.focus();
+    restoreSelection();
+    document.execCommand('insertHTML', false, tmp.innerHTML);
+    saveSelection();
+    onChange();
   }
 
   // ---- 项目符号列表 ----
@@ -260,6 +322,7 @@ const Editor = (() => {
     toggleNumbered,
     toggleChecklist,
     insertImage,
+    insertCleanHTML,
     queryState
   };
 })();
