@@ -456,6 +456,12 @@ body {
 .tb-btn:disabled { opacity: 0.35; cursor: default; }
 .tb-btn:disabled:hover { background: transparent; color: var(--text-secondary); }
 
+/* 立即同步按钮：用强调色着色，便于随时找到 */
+.tb-sync { color: var(--accent-strong); }
+.tb-sync:hover { background: var(--hover-strong); color: var(--accent-strong); }
+.tb-sync.syncing { animation: tb-sync-spin 0.6s linear; }
+@keyframes tb-sync-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
 /* 文字样式弹出面板 */
 .popover {
   position: absolute;

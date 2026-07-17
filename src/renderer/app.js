@@ -229,17 +229,22 @@
   }
 
   // 以本机为准，强制同步到所有已连接设备（用于同步卡住/删除没传过去时的兜底）
-  function forceSyncFromHere() {
+  // needConfirm=true：弹窗里的入口，先确认；false：右上角工具栏的快捷入口，随点随同步
+  function doForceSync(needConfirm) {
     if (!Sync.available()) { showToast('请在桌面应用中使用'); return; }
     const st = Sync.getStatus();
-    if (!st.enabled) { showToast('请先开启同步'); return; }
+    if (!st.enabled) { showToast('同步未开启：请先在左下角「局域网同步」里开启'); return; }
     const peerCount = (st.peers || []).length;
-    if (!peerCount) { showToast('还没连接到其它设备，无法强制同步'); return; }
-    if (!confirm('将以【本机】的内容为准，强制同步到已连接的 ' + peerCount + ' 台设备。\n\n对端与本机相同的笔记会被本机版本覆盖，本机已删除的也会在对端删除（不受时间先后影响）。\n对端上本机没有的笔记会保留。\n\n确定继续吗？')) return;
+    if (!peerCount) { showToast('还没连接到其它设备'); return; }
+    if (needConfirm && !confirm('将以【本机】的内容为准，强制同步到已连接的 ' + peerCount + ' 台设备。\n\n对端与本机相同的笔记会被本机版本覆盖，本机已删除的也会在对端删除（不受时间先后影响）。\n对端上本机没有的笔记会保留。\n\n确定继续吗？')) return;
     saveNow(); // 先把内存里的最新改动纳入
     const n = Sync.forceSyncAll();
-    showToast(n > 0 ? ('已以本机为准，强制同步到 ' + n + ' 台设备') : '没有可同步的设备');
+    // 工具栏按钮转一下，给个"已同步"的反馈
+    const btn = $('syncNowBtn');
+    if (btn && n > 0) { btn.classList.remove('syncing'); void btn.offsetWidth; btn.classList.add('syncing'); }
+    showToast(n > 0 ? ('已以本机为准，同步到 ' + n + ' 台设备') : '没有可同步的设备');
   }
+  function forceSyncFromHere() { doForceSync(true); }
 
   // ---------- 主题 ----------
   function currentTheme() {
@@ -422,7 +427,8 @@
     const isTrash = !!note.trashed;
     Editor.el.contentEditable = isTrash ? 'false' : 'true';
     toolbar.querySelectorAll('.tb-btn').forEach((b) => {
-      if (b.dataset.cmd === 'delete') b.disabled = false;
+      // 删除、立即同步始终可用（同步按钮任何时候都能点，包括在回收站里）
+      if (b.dataset.cmd === 'delete' || b.dataset.cmd === 'sync-now') b.disabled = false;
       else b.disabled = isTrash;
     });
     pinBtn.classList.toggle('active', !!note.pinned);
@@ -1049,6 +1055,7 @@
       case 'image': Editor.saveSelection(); imageInput.click(); break;
       case 'pin': if (view.noteId) togglePin(view.noteId); return;
       case 'delete': handleDeleteCurrent(); return;
+      case 'sync-now': doForceSync(false); return;
     }
     updateToolbarState();
   }
