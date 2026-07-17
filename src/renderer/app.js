@@ -4,10 +4,12 @@
 (() => {
   const SPECIAL = { ALL: 'all', TRASH: 'trash' };
   const TRASH_KEEP_DAYS = 30;
+  const TOMBSTONE_KEEP_DAYS = 90; // 删除墓碑保留多久后真正移除
 
   let data = { version: 1, folders: [], notes: [] };
   const view = { folderId: SPECIAL.ALL, noteId: null, query: '' };
   let saveTimer = null;
+  const pendingSync = new Set(); // 待广播到其它设备的笔记 id
 
   // ---------- DOM ----------
   const $ = (id) => document.getElementById(id);
@@ -31,6 +33,9 @@
   const appEl = $('app');
   const sidebarToggle = $('sidebarToggle');
   const listResizer = $('listResizer');
+  const syncBtn = $('syncBtn');
+  const syncDot = $('syncDot');
+  const syncModal = $('syncModal');
 
   // ---------- 工具函数 ----------
   const now = () => Date.now();
@@ -85,13 +90,14 @@
   }
 
   function notesInFolder(folderId) {
-    if (folderId === SPECIAL.TRASH) return data.notes.filter((n) => n.trashed);
-    if (folderId === SPECIAL.ALL) return data.notes.filter((n) => !n.trashed);
-    return data.notes.filter((n) => !n.trashed && n.folderId === folderId);
+    if (folderId === SPECIAL.TRASH) return data.notes.filter((n) => n.trashed && !n.deleted);
+    if (folderId === SPECIAL.ALL) return data.notes.filter((n) => !n.trashed && !n.deleted);
+    return data.notes.filter((n) => !n.trashed && !n.deleted && n.folderId === folderId);
   }
 
-  function findNote(id) { return data.notes.find((n) => n.id === id); }
-  function findFolder(id) { return data.folders.find((f) => f.id === id); }
+  function findNote(id) { return data.notes.find((n) => n.id === id && !n.deleted); }
+  function findNoteRaw(id) { return data.notes.find((n) => n.id === id); }  // 含墓碑，供合并/广播用
+  function findFolder(id) { return data.folders.find((f) => f.id === id && !f.deleted); }
 
   function showToast(msg) {
     toast.textContent = msg;
@@ -113,6 +119,112 @@
     clearTimeout(saveTimer);
     const res = await Storage.save(data);
     if (res && res.ok === false) showToast('保存失败，请检查磁盘空间');
+    // 把本次改动的笔记广播给其它设备
+    if (pendingSync.size) {
+      pendingSync.forEach((id) => { const n = findNoteRaw(id); if (n) Sync.broadcastNote(n); });
+      pendingSync.clear();
+    }
+  }
+
+  // ---------- 同步：合并来自其它设备的改动（LWW，按 syncTs）----------
+  function ver(x) { return (x && (x.syncTs || x.updatedAt)) || 0; }
+  function mergeNote(incoming) {
+    if (!incoming || !incoming.id) return false;
+    const local = findNoteRaw(incoming.id);
+    if (!local) { data.notes.push(incoming); return true; }
+    if (ver(incoming) > ver(local)) {
+      // 不打断正在输入的当前笔记；用户下一次保存(更晚的 syncTs)会自然胜出
+      if (incoming.id === view.noteId && document.activeElement === Editor.el) return false;
+      // 冲突保护：本地这条有"还没广播出去"的改动、且内容与对端不同 → 把本地版本留成「冲突副本」，避免丢失
+      if (pendingSync.has(local.id) && !local.deleted && !incoming.deleted && (local.content || '') !== (incoming.content || '')) {
+        const copy = Object.assign({}, local, {
+          id: genId('n'), syncTs: now(), updatedAt: now(),
+          content: '<div>⚠️ 冲突副本（另一台设备也同时改了这条）</div>' + (local.content || '')
+        });
+        data.notes.push(copy);
+        pendingSync.add(copy.id);
+      }
+      Object.assign(local, incoming);
+      return true;
+    }
+    return false;
+  }
+  function mergeFolder(incoming) {
+    if (!incoming || !incoming.id) return false;
+    const local = data.folders.find((f) => f.id === incoming.id);
+    if (!local) { data.folders.push(incoming); return true; }
+    if (ver(incoming) > ver(local)) { Object.assign(local, incoming); return true; }
+    return false;
+  }
+  function applyIncoming(payload) {
+    let changed = false;
+    (payload.folders || []).forEach((f) => { if (mergeFolder(f)) changed = true; });
+    (payload.notes || []).forEach((n) => { if (mergeNote(n)) changed = true; });
+    if (!changed) return;
+    if (view.noteId && !findNote(view.noteId)) view.noteId = null;
+    saveNow();
+    renderFolders();
+    renderNoteList();
+    if (document.activeElement !== Editor.el) renderEditor(); // 不在输入时才刷新编辑器
+  }
+
+  // ---------- 同步：设置界面 ----------
+  function escapeHtml(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+  function onSyncStatus(st) { renderSyncStatus(st); }
+  function renderSyncStatus(st) {
+    st = st || { enabled: false, peers: [] };
+    const peers = st.peers || [];
+    syncDot.classList.toggle('on', !!st.enabled && peers.length > 0);
+    syncDot.classList.toggle('idle', !!st.enabled && peers.length === 0);
+    const box = $('syncStatusBox');
+    const toggle = $('syncToggle');
+    if (!Sync.available()) {
+      if (box) box.textContent = '此功能仅在桌面应用中可用（当前是浏览器预览）';
+      if (toggle) { toggle.textContent = '开启同步'; toggle.disabled = true; }
+      return;
+    }
+    if (toggle) {
+      toggle.disabled = false;
+      toggle.textContent = st.enabled ? '停止同步' : '开启同步';
+      toggle.classList.toggle('stop', !!st.enabled);
+    }
+    if (box) {
+      box.classList.toggle('on', !!st.enabled);
+      if (!st.enabled) box.textContent = '未开启';
+      else if (!peers.length) box.innerHTML = '已开启 · 正在局域网内查找其它设备……' + portHint(st);
+      else box.innerHTML = '已连接 ' + peers.length + ' 台设备：' +
+        peers.map((p) => '<span class="sync-peer">🖥 ' + escapeHtml(p.name || '设备') + '</span>').join('') + portHint(st);
+    }
+  }
+  function portHint(st) {
+    return st.port ? '<div class="sync-tip" style="margin-top:6px">本机端口 ' + st.port + '（手动配对时对方填「你的IP:' + st.port + '」）</div>' : '';
+  }
+
+  function openSyncModal() {
+    const cfg = Sync.getConfig();
+    $('syncCode').value = cfg.code || '';
+    $('syncName').value = cfg.deviceName || '';
+    $('syncManual').value = (cfg.manualPeers || []).join('\n');
+    renderSyncStatus(Sync.getStatus());
+    syncModal.hidden = false;
+  }
+  function closeSyncModal() { syncModal.hidden = true; }
+
+  function toggleSync() {
+    if (!Sync.available()) { showToast('请在桌面应用中使用'); return; }
+    const running = Sync.getStatus().enabled;
+    if (running) {
+      Sync.stop();
+    } else {
+      const code = $('syncCode').value.trim();
+      if (!code) { showToast('请先填写同步码'); return; }
+      const deviceName = $('syncName').value.trim();
+      const manualPeers = $('syncManual').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      Sync.setConfig({ code, deviceName: deviceName || undefined, manualPeers });
+      Sync.start();
+    }
+    renderSyncStatus(Sync.getStatus());
+    showToast(Sync.getStatus().enabled ? '同步已开启' : '同步已停止');
   }
 
   // ---------- 主题 ----------
@@ -170,12 +282,13 @@
       count: notesInFolder(SPECIAL.ALL).length
     }));
 
-    if (data.folders.length) {
+    const userFolders = data.folders.filter((f) => !f.deleted);
+    if (userFolders.length) {
       const label = document.createElement('div');
       label.className = 'sidebar-section-label';
       label.textContent = '我的文件夹';
       folderListEl.appendChild(label);
-      data.folders.forEach((f) => {
+      userFolders.forEach((f) => {
         folderListEl.appendChild(makeFolderItem({
           id: f.id, name: f.name, icon: ICON.folder, kind: 'user',
           count: notesInFolder(f.id).length
@@ -346,6 +459,8 @@
     if (!note || note.trashed) return;
     note.content = Editor.getHTML();
     note.updatedAt = now();
+    note.syncTs = now();
+    pendingSync.add(note.id);
     // 就地更新列表项的标题 / 摘要 / 日期，避免打字时列表跳动
     const item = noteListEl.querySelector(`.note-item[data-id="${note.id}"]`);
     if (item) {
@@ -365,9 +480,10 @@
     const note = {
       id: genId('n'), folderId, content: '<div><br></div>',
       pinned: false, trashed: false,
-      createdAt: now(), updatedAt: now()
+      createdAt: now(), updatedAt: now(), syncTs: now()
     };
     data.notes.unshift(note);
+    pendingSync.add(note.id);
     if (view.folderId === SPECIAL.TRASH) view.folderId = SPECIAL.ALL;
     view.query = '';
     searchInput.value = '';
@@ -382,10 +498,11 @@
   }
 
   function newFolder() {
-    const folder = { id: genId('f'), name: '新建文件夹', createdAt: now() };
+    const folder = { id: genId('f'), name: '新建文件夹', createdAt: now(), updatedAt: now(), syncTs: now() };
     data.folders.push(folder);
     renderFolders();
     saveNow();
+    Sync.broadcastFolder(folder);
     startRenameFolder(folder.id);
   }
 
@@ -403,9 +520,12 @@
     const commit = () => {
       const v = input.value.trim();
       folder.name = v || '未命名文件夹';
+      folder.updatedAt = now();
+      folder.syncTs = now();
       renderFolders();
       if (view.folderId === id) renderNoteList();
       saveNow();
+      Sync.broadcastFolder(folder);
     };
     input.addEventListener('blur', commit, { once: true });
     input.addEventListener('keydown', (e) => {
@@ -417,9 +537,9 @@
   function deleteFolder(id) {
     const folder = findFolder(id);
     if (!folder) return;
-    const affected = data.notes.filter((n) => n.folderId === id && !n.trashed);
-    affected.forEach((n) => { n.trashed = true; n.trashedAt = now(); });
-    data.folders = data.folders.filter((f) => f.id !== id);
+    const affected = data.notes.filter((n) => n.folderId === id && !n.trashed && !n.deleted);
+    affected.forEach((n) => { n.trashed = true; n.trashedAt = now(); n.syncTs = now(); pendingSync.add(n.id); });
+    folder.deleted = true; folder.deletedAt = now(); folder.syncTs = now(); // 用墓碑标记，好同步删除
     if (view.folderId === id) {
       // 删的是当前正在看的文件夹 → 切回「所有备忘录」
       selectFolder(SPECIAL.ALL);
@@ -434,6 +554,7 @@
       renderEditor();
     }
     saveNow();
+    Sync.broadcastFolder(folder);
     showToast(affected.length ? `文件夹已删除，${affected.length} 条备忘录移到最近删除` : '文件夹已删除');
   }
 
@@ -442,16 +563,20 @@
     if (!note) return;
     note.trashed = true;
     note.trashedAt = now();
+    note.syncTs = now();
+    pendingSync.add(id);
     afterRemoveFromView(id);
     saveNow();
     showToast('已移到最近删除');
   }
 
   function restoreNote(id) {
-    const note = findNote(id);
+    const note = findNoteRaw(id);
     if (!note) return;
     note.trashed = false;
     note.trashedAt = null;
+    note.syncTs = now();
+    pendingSync.add(id);
     if (note.folderId && !findFolder(note.folderId)) note.folderId = null;
     afterRemoveFromView(id);
     saveNow();
@@ -459,7 +584,8 @@
   }
 
   function deleteForever(id) {
-    data.notes = data.notes.filter((n) => n.id !== id);
+    const note = findNoteRaw(id);
+    if (note) { note.deleted = true; note.deletedAt = now(); note.syncTs = now(); note.content = ''; pendingSync.add(id); }
     afterRemoveFromView(id);
     saveNow();
   }
@@ -481,7 +607,8 @@
     const note = findNote(id);
     if (!note) return;
     note.pinned = !note.pinned;
-    // 置顶/取消置顶不算内容修改，不刷新 updatedAt（否则会跳到列表顶部、显示错误的修改时间）
+    note.syncTs = now();   // 同步版本 bump（但不动 updatedAt，避免跳到列表顶部/显示错误修改时间）
+    pendingSync.add(id);
     renderNoteList();
     if (id === view.noteId) pinBtn.classList.toggle('active', note.pinned);
     saveNow();
@@ -492,7 +619,8 @@
     const note = findNote(id);
     if (!note) return;
     note.folderId = folderId;
-    // 移动文件夹不算内容修改，保留原 updatedAt
+    note.syncTs = now();   // 同步版本 bump（保留原 updatedAt）
+    pendingSync.add(id);
     afterRemoveFromView(id);
     saveNow();
     const name = folderId ? (findFolder(folderId) || {}).name : '所有备忘录';
@@ -689,6 +817,12 @@
     // 边栏收起 / 展开
     sidebarToggle.addEventListener('click', () => toggleSidebar());
 
+    // 局域网同步
+    syncBtn.addEventListener('click', openSyncModal);
+    $('syncClose').addEventListener('click', closeSyncModal);
+    $('syncToggle').addEventListener('click', toggleSync);
+    syncModal.addEventListener('click', (e) => { if (e.target === syncModal) closeSyncModal(); });
+
     // 拖动分隔线调整列表宽度（编辑区自动填充剩余空间）
     const LIST_MIN = 240, LIST_MAX = 640;
     let resizing = false;
@@ -809,7 +943,7 @@
       if (!formatPopover.hidden && !formatPopover.contains(e.target) && !e.target.closest('[data-cmd="format"]')) hidePopover();
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { hideContextMenu(); hidePopover(); }
+      if (e.key === 'Escape') { hideContextMenu(); hidePopover(); if (!syncModal.hidden) closeSyncModal(); }
       // Ctrl/Cmd + \ 收起/展开边栏（Electron 与浏览器都可用，无菜单冲突）
       if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
     });
@@ -879,10 +1013,22 @@
 
   // 清理超过保留期的回收站笔记。render=true 时刷新界面（用于常驻运行时的定时清理）。
   function purgeTrash(render) {
-    const cutoff = now() - TRASH_KEEP_DAYS * 86400000;
-    const before = data.notes.length;
-    data.notes = data.notes.filter((n) => !(n.trashed && n.trashedAt && n.trashedAt < cutoff));
-    if (data.notes.length === before) return;
+    let changed = false;
+    const trashCutoff = now() - TRASH_KEEP_DAYS * 86400000;
+    const tombCutoff = now() - TOMBSTONE_KEEP_DAYS * 86400000;
+    // 回收站里超过保留期的 → 转成删除墓碑（这样删除也能同步到其它设备）
+    data.notes.forEach((n) => {
+      if (n.trashed && !n.deleted && n.trashedAt && n.trashedAt < trashCutoff) {
+        n.deleted = true; n.deletedAt = now(); n.syncTs = now(); n.content = '';
+        pendingSync.add(n.id); changed = true;
+      }
+    });
+    // 非常久以前的墓碑 → 真正移除（此时各设备早已同步过这条删除）
+    const bn = data.notes.length, bf = data.folders.length;
+    data.notes = data.notes.filter((n) => !(n.deleted && n.deletedAt && n.deletedAt < tombCutoff));
+    data.folders = data.folders.filter((f) => !(f.deleted && f.deletedAt && f.deletedAt < tombCutoff));
+    if (data.notes.length !== bn || data.folders.length !== bf) changed = true;
+    if (!changed) return;
     if (view.noteId && !findNote(view.noteId)) view.noteId = null;
     if (render) { renderFolders(); renderNoteList(); renderEditor(); }
     scheduleSave();
@@ -932,6 +1078,10 @@
     view.noteId = first ? first.id : null;
     renderNoteList();
     renderEditor();
+
+    // 局域网同步：接入（若上次开着会自动开始）
+    Sync.init({ getData: () => data, applyIncoming: applyIncoming, onStatusChange: onSyncStatus });
+    renderSyncStatus(Sync.getStatus());
   }
 
   init();

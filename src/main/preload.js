@@ -16,5 +16,19 @@ contextBridge.exposeInMainWorld('notesAPI', {
   onMenuAction: (callback) => {
     const channels = ['menu:new-note', 'menu:new-folder', 'menu:search', 'menu:toggle-theme'];
     channels.forEach((ch) => ipcRenderer.on(ch, () => callback(ch)));
+  },
+  // 测试用：通过环境变量自动开启同步（QINGJI_SYNC=JSON）
+  autoSync: (() => { try { return JSON.parse(process.env.QINGJI_SYNC || 'null'); } catch (_) { return null; } })(),
+  // 局域网同步
+  sync: {
+    start: (cfg) => ipcRenderer.invoke('sync:start', cfg),
+    stop: () => ipcRenderer.invoke('sync:stop'),
+    status: () => ipcRenderer.invoke('sync:status'),
+    send: (data) => ipcRenderer.send('sync:send', data),
+    sendTo: (peerId, data) => ipcRenderer.send('sync:send-to', { peerId, data }),
+    onMessage: (cb) => ipcRenderer.on('sync:message', (_e, m) => cb(m)),
+    onPeerConnected: (cb) => ipcRenderer.on('sync:peer-connected', (_e, p) => cb(p)),
+    onPeerDisconnected: (cb) => ipcRenderer.on('sync:peer-disconnected', (_e, p) => cb(p)),
+    onStatus: (cb) => ipcRenderer.on('sync:status', (_e, s) => cb(s))
   }
 });

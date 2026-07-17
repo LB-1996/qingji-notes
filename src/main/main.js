@@ -1,7 +1,10 @@
 const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron');
+// 允许用环境变量指定数据目录（必须在 require ./store 之前——store 在加载时就会读取 userData 路径）
+if (process.env.QINGJI_USERDATA) { try { app.setPath('userData', process.env.QINGJI_USERDATA); } catch (_) {} }
 const path = require('path');
 const fs = require('fs');
 const { readData, writeData, writeDataSync } = require('./store');
+const sync = require('./sync');
 
 const isDev = process.argv.includes('--dev');
 let mainWindow = null;
@@ -90,6 +93,23 @@ ipcMain.on('data:save-sync', (event, data) => {
   event.returnValue = writeDataSync(data);
 });
 
+// ===== 局域网同步 =====
+function sendToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send(channel, payload); } catch (_) {}
+  }
+}
+sync.on('message', (m) => sendToRenderer('sync:message', m));
+sync.on('peer-connected', (p) => sendToRenderer('sync:peer-connected', p));
+sync.on('peer-disconnected', (p) => sendToRenderer('sync:peer-disconnected', p));
+sync.on('status', (s) => sendToRenderer('sync:status', s));
+
+ipcMain.handle('sync:start', (_e, cfg) => { sync.start(cfg); return sync.getStatus(); });
+ipcMain.handle('sync:stop', () => { sync.stop(); return sync.getStatus(); });
+ipcMain.handle('sync:status', () => sync.getStatus());
+ipcMain.on('sync:send', (_e, data) => sync.broadcast(data));
+ipcMain.on('sync:send-to', (_e, payload) => sync.sendTo(payload.peerId, payload.data));
+
 // ===== 应用生命周期 =====
 app.whenReady().then(() => {
   buildMenu();
@@ -103,6 +123,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
+
+app.on('before-quit', () => { try { sync.stop(); } catch (_) {} });
 
 // ===== 菜单（带常用快捷键）=====
 function buildMenu() {
