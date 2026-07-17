@@ -1,8 +1,9 @@
-const { app, BrowserWindow, ipcMain, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, shell, clipboard, nativeImage } = require('electron');
 // 允许用环境变量指定数据目录（必须在 require ./store 之前——store 在加载时就会读取 userData 路径）
 if (process.env.QINGJI_USERDATA) { try { app.setPath('userData', process.env.QINGJI_USERDATA); } catch (_) {} }
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { readData, writeData, writeDataSync } = require('./store');
 const sync = require('./sync');
 
@@ -96,6 +97,31 @@ ipcMain.on('data:save-sync', (event, data) => {
 // 应用版本号（界面上显示，便于区分版本）
 ipcMain.on('app:version-sync', (event) => {
   event.returnValue = app.getVersion();
+});
+
+// ===== 图片：复制到系统剪贴板 / 拖拽到其它应用 =====
+// 复制：把内嵌的 data:image 写成系统原生图片，粘贴到微信/聊天/Word 等才是真图片
+ipcMain.handle('image:copy', (_event, dataUrl) => {
+  try {
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (img.isEmpty()) return false;
+    clipboard.writeImage(img);
+    return true;
+  } catch (_) { return false; }
+});
+
+// 拖拽：把图片写成临时 PNG 文件，用 Electron 原生拖拽拖到其它应用（访达、聊天窗等）
+let dragSeq = 0;
+ipcMain.on('image:start-drag', (event, dataUrl) => {
+  try {
+    const img = nativeImage.createFromDataURL(dataUrl);
+    if (img.isEmpty()) return;
+    const file = path.join(os.tmpdir(), `qingji-image-${Date.now()}-${dragSeq++}.png`);
+    fs.writeFileSync(file, img.toPNG());
+    let icon = img.resize({ width: 128 });   // 拖拽时跟随鼠标的缩略图
+    if (icon.isEmpty()) icon = img;
+    event.sender.startDrag({ file, icon });
+  } catch (_) { /* 忽略拖拽失败 */ }
 });
 
 // ===== 局域网同步 =====

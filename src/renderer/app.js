@@ -675,6 +675,16 @@
 
   // 把笔记里的图片复制到系统剪贴板（可粘贴到微信/Word 等别处）
   async function copyImageToClipboard(img) {
+    const src = img && (img.currentSrc || img.src);
+    if (!src) return;
+    // 桌面端：走 Electron 系统原生剪贴板，最稳，能粘贴进微信/聊天/Word 等原生应用
+    if (window.notesAPI && window.notesAPI.image && window.notesAPI.image.copy) {
+      try {
+        const ok = await window.notesAPI.image.copy(src);
+        if (ok) { showToast('图片已复制，可粘贴到别处'); return; }
+      } catch (_) { /* 落到下面的浏览器兜底 */ }
+    }
+    // 浏览器兜底：Canvas → ClipboardItem
     try {
       const canvas = document.createElement('canvas');
       canvas.width = img.naturalWidth || img.width;
@@ -688,7 +698,7 @@
       }
       throw new Error('clipboard API 不可用');
     } catch (e) {
-      // 兜底：选中图片，让用户自己按 Ctrl/⌘+C
+      // 再兜底：选中图片，让用户自己按 Ctrl/⌘+C
       const range = document.createRange();
       range.selectNode(img);
       const sel = window.getSelection();
@@ -696,6 +706,28 @@
       sel.addRange(range);
       showToast('已选中图片，按 Ctrl/⌘+C 复制');
     }
+  }
+
+  // 判断当前选区是否恰好是单张图片（用于 Cmd/Ctrl+C 时复制真图片而非 alt 文本"图片"）
+  function selectedSingleImage() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return null;
+    const range = sel.getRangeAt(0);
+    const sc = range.startContainer;
+    // 点击图片后是 selectNode(img)：同一父节点内恰好选中一个 img 子节点
+    if (sc.nodeType === 1 && range.endContainer === sc && (range.endOffset - range.startOffset) === 1) {
+      const node = sc.childNodes[range.startOffset];
+      if (node && node.tagName === 'IMG') return node;
+    }
+    // 兜底：选区内容只有一张 img、没有文字
+    try {
+      const frag = range.cloneContents();
+      const imgs = Array.from(frag.querySelectorAll('img'));
+      if (imgs.length === 1 && !(frag.textContent || '').trim()) {
+        return Array.from(Editor.el.querySelectorAll('img')).find((i) => i.src === imgs[0].src) || null;
+      }
+    } catch (_) {}
+    return null;
   }
 
   // ---------- 右键菜单 ----------
@@ -908,6 +940,23 @@
         items.push({ label: '删除图片', danger: true, onClick: () => { img.remove(); onEditorChange(); } });
       }
       showContextMenu(e.clientX, e.clientY, items);
+    });
+
+    // 选中图片按 Cmd/Ctrl+C → 复制真图片（否则默认只会复制 alt 文本"图片"）
+    Editor.el.addEventListener('copy', (e) => {
+      const img = selectedSingleImage();
+      if (!img) return;            // 普通文字复制照旧
+      e.preventDefault();
+      copyImageToClipboard(img);
+    });
+
+    // 把图片拖到其它应用（微信、访达等）→ 走 Electron 原生拖拽，拖出真的图片文件
+    Editor.el.addEventListener('dragstart', (e) => {
+      if (e.target && e.target.tagName === 'IMG' &&
+          window.notesAPI && window.notesAPI.image && window.notesAPI.image.startDrag) {
+        e.preventDefault();
+        window.notesAPI.image.startDrag(e.target.currentSrc || e.target.src);
+      }
     });
 
     // 拖拽图片到编辑区

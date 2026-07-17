@@ -14,6 +14,11 @@ contextBridge.exposeInMainWorld('notesAPI', {
   isElectron: true,
   // 应用版本号（界面右下角显示）
   appVersion: (() => { try { return ipcRenderer.sendSync('app:version-sync'); } catch (_) { return ''; } })(),
+  // 图片：复制到系统剪贴板 / 拖拽到其它应用（原生，能被微信/访达等接收）
+  image: {
+    copy: (dataUrl) => ipcRenderer.invoke('image:copy', dataUrl),
+    startDrag: (dataUrl) => ipcRenderer.send('image:start-drag', dataUrl)
+  },
   // 菜单栏动作（新建、搜索、切换主题等）转发给界面
   onMenuAction: (callback) => {
     const channels = ['menu:new-note', 'menu:new-folder', 'menu:search', 'menu:toggle-theme'];
