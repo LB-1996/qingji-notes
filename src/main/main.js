@@ -4,11 +4,22 @@ if (process.env.QINGJI_USERDATA) { try { app.setPath('userData', process.env.QIN
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { readData, writeData, writeDataSync } = require('./store');
 const sync = require('./sync');
 
 const isDev = process.argv.includes('--dev');
 let mainWindow = null;
+let deviceId = '';
+
+// 设备 ID 存成文件（主进程同步写盘），闪退/强杀也不丢，保证重启后身份与固定端口不变
+function loadDeviceId() {
+  const f = path.join(app.getPath('userData'), 'device-id.txt');
+  try { const v = fs.readFileSync(f, 'utf8').trim(); if (v) return v; } catch (_) {}
+  const id = 'd_' + crypto.randomBytes(9).toString('hex');
+  try { fs.writeFileSync(f, id); } catch (_) {}
+  return id;
+}
 
 // 运行时窗口/任务栏图标：优先根目录 logo.ico / logo.png，否则用自带默认图标
 function resolveIcon() {
@@ -98,6 +109,7 @@ ipcMain.on('data:save-sync', (event, data) => {
 ipcMain.on('app:version-sync', (event) => {
   event.returnValue = app.getVersion();
 });
+ipcMain.on('app:device-id', (event) => { event.returnValue = deviceId; });
 
 // ===== 图片：复制到系统剪贴板 / 拖拽到其它应用 =====
 // 复制：把内嵌的 data:image 写成系统原生图片，粘贴到微信/聊天/Word 等才是真图片
@@ -143,6 +155,7 @@ ipcMain.on('sync:send-to', (_e, payload) => sync.sendTo(payload.peerId, payload.
 
 // ===== 应用生命周期 =====
 app.whenReady().then(() => {
+  deviceId = loadDeviceId();
   buildMenu();
   createWindow();
 

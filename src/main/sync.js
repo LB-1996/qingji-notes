@@ -45,9 +45,20 @@ class SyncService extends EventEmitter {
     this.codeHash = hashCode(this.code);
     this.deviceId = cfg.deviceId;
     this.deviceName = cfg.deviceName || os.hostname();
+    this._listen(cfg.port || 0, cfg);
+  }
 
-    this.wss = new WebSocketServer({ port: cfg.port || 0, maxPayload: MAX_PAYLOAD });
-    this.wss.on('error', (e) => this.emit('status', Object.assign(this.getStatus(), { error: '监听失败：' + e.message })));
+  // 监听端口；固定端口被占用时自动退回随机端口，保证同步始终能开起来
+  _listen(port, cfg) {
+    this.wss = new WebSocketServer({ port, maxPayload: MAX_PAYLOAD });
+    this.wss.on('error', (e) => {
+      if (e && e.code === 'EADDRINUSE' && port !== 0) {
+        try { this.wss.close(); } catch (_) {}
+        this._listen(0, cfg);
+      } else {
+        this.emit('status', Object.assign(this.getStatus(), { error: '监听失败：' + e.message }));
+      }
+    });
     this.wss.on('connection', (ws) => this._onServerConnection(ws));
     this.wss.on('listening', () => {
       this.port = this.wss.address().port;

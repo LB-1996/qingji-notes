@@ -24,10 +24,14 @@ const Sync = (() => {
   }
 
   function loadConfig() {
-    deviceId = localStorage.getItem(ID_KEY);
+    // 优先用主进程持久化(文件)的设备 ID —— 闪退/强杀也不变，保证固定端口与身份稳定
+    deviceId = (window.notesAPI && window.notesAPI.deviceId) || '';
     if (!deviceId) {
-      deviceId = 'd_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-      localStorage.setItem(ID_KEY, deviceId);
+      deviceId = localStorage.getItem(ID_KEY);
+      if (!deviceId) {
+        deviceId = 'd_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+        localStorage.setItem(ID_KEY, deviceId);
+      }
     }
     try {
       const saved = JSON.parse(localStorage.getItem(CFG_KEY));
@@ -59,10 +63,16 @@ const Sync = (() => {
     if (cfg.enabled && cfg.code) start();
   }
 
+  // 按设备 ID 生成一个固定端口（重启后不变），这样对端不必重新发现也能连回同一端口
+  function stablePort() {
+    let h = 5381;
+    for (let i = 0; i < deviceId.length; i++) h = ((h * 33) ^ deviceId.charCodeAt(i)) >>> 0;
+    return 20000 + (h % 40000); // 20000–59999
+  }
   function start() {
     if (!available() || !cfg.code) return;
     cfg.enabled = true; saveConfig();
-    api().start({ code: cfg.code, deviceId, deviceName: cfg.deviceName, manualPeers: cfg.manualPeers, port: forcePort });
+    api().start({ code: cfg.code, deviceId, deviceName: cfg.deviceName, manualPeers: cfg.manualPeers, port: forcePort || stablePort() });
   }
   function stop() {
     cfg.enabled = false; saveConfig();

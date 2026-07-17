@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('notesAPI', {
   isElectron: true,
   // 应用版本号（界面右下角显示）
   appVersion: (() => { try { return ipcRenderer.sendSync('app:version-sync'); } catch (_) { return ''; } })(),
+  // 设备 ID（主进程文件持久化，闪退不丢；用于固定端口与身份稳定）
+  deviceId: (() => { try { return ipcRenderer.sendSync('app:device-id'); } catch (_) { return ''; } })(),
   // 图片：复制到系统剪贴板 / 拖拽到其它应用（原生，能被微信/访达等接收）
   image: {
     copy: (dataUrl) => ipcRenderer.invoke('image:copy', dataUrl),
