@@ -191,6 +191,9 @@ body {
 }
 .folder-item:hover { background: var(--hover); }
 .folder-item.active { background: var(--sel-bg-inactive); }
+/* 拖动笔记到文件夹上时的高亮 */
+.folder-item.drop-target { background: var(--accent-strong); box-shadow: inset 0 0 0 2px var(--accent-strong); }
+.folder-item.drop-target .folder-name, .folder-item.drop-target .folder-ico, .folder-item.drop-target .folder-count { color: #1c1c1e; }
 .folder-item.active .folder-ico { color: var(--accent-strong); }
 .folder-item .folder-ico { color: var(--accent-strong); display: inline-flex; flex-shrink: 0; }
 .folder-item.trash .folder-ico { color: var(--text-secondary); }
@@ -344,6 +347,7 @@ body {
   padding: 0 8px 12px;
 }
 
+.note-item.dragging { opacity: 0.45; }
 .note-item {
   padding: 10px 12px;
   border-radius: 9px;

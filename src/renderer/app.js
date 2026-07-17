@@ -351,6 +351,7 @@
     const div = document.createElement('div');
     div.className = 'note-item' + (note.id === view.noteId ? ' active' : '') + (note.pinned ? ' pinned' : '');
     div.dataset.id = note.id;
+    if (!note.trashed) div.setAttribute('draggable', 'true'); // 可拖到左侧文件夹归类
 
     const title = document.createElement('div');
     title.className = 'ni-title';
@@ -840,6 +841,43 @@
       e.preventDefault();
       const note = findNote(item.dataset.id);
       if (note) showContextMenu(e.clientX, e.clientY, noteContextItems(note));
+    });
+
+    // ---- 拖动笔记到左侧文件夹归类 ----
+    let draggingNoteId = null;
+    const clearDropHints = () => folderListEl.querySelectorAll('.folder-item.drop-target').forEach((el) => el.classList.remove('drop-target'));
+    noteListEl.addEventListener('dragstart', (e) => {
+      const item = e.target.closest('.note-item');
+      if (!item) return;
+      draggingNoteId = item.dataset.id;
+      item.classList.add('dragging');
+      try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', item.dataset.id); } catch (_) {}
+    });
+    noteListEl.addEventListener('dragend', (e) => {
+      const item = e.target.closest('.note-item'); if (item) item.classList.remove('dragging');
+      draggingNoteId = null; clearDropHints();
+    });
+    folderListEl.addEventListener('dragover', (e) => {
+      if (!draggingNoteId) return;
+      const item = e.target.closest('.folder-item');
+      if (!item) return;
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+      if (!item.classList.contains('drop-target')) { clearDropHints(); item.classList.add('drop-target'); }
+    });
+    folderListEl.addEventListener('dragleave', (e) => {
+      const item = e.target.closest('.folder-item');
+      if (item && !item.contains(e.relatedTarget)) item.classList.remove('drop-target');
+    });
+    folderListEl.addEventListener('drop', (e) => {
+      const item = e.target.closest('.folder-item');
+      const noteId = draggingNoteId;
+      draggingNoteId = null; clearDropHints();
+      if (!item || !noteId) return;
+      e.preventDefault();
+      const target = item.dataset.id;
+      if (target === SPECIAL.TRASH) { moveNoteToTrash(noteId); return; }   // 拖到「最近删除」= 删除
+      moveNote(noteId, target === SPECIAL.ALL ? null : target);            // 拖到「所有备忘录」= 移出文件夹
     });
 
     // 新建
