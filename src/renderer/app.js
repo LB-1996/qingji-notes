@@ -128,38 +128,39 @@
 
   // ---------- 同步：合并来自其它设备的改动（LWW，按 syncTs）----------
   function ver(x) { return (x && (x.syncTs || x.updatedAt)) || 0; }
-  function mergeNote(incoming) {
+  // force=true：来自「以本机为准」强制同步，无视时间戳直接采用对端(发起方)的版本
+  function mergeNote(incoming, force) {
     if (!incoming || !incoming.id) return false;
     const local = findNoteRaw(incoming.id);
     if (!local) { data.notes.push(incoming); return true; }
-    if (ver(incoming) > ver(local)) {
-      // 不打断正在输入的当前笔记；用户下一次保存(更晚的 syncTs)会自然胜出
-      if (incoming.id === view.noteId && document.activeElement === Editor.el) return false;
-      // 冲突保护：本地这条有"还没广播出去"的改动、且内容与对端不同 → 把本地版本留成「冲突副本」，避免丢失
-      if (pendingSync.has(local.id) && !local.deleted && !incoming.deleted && (local.content || '') !== (incoming.content || '')) {
-        const copy = Object.assign({}, local, {
-          id: genId('n'), syncTs: now(), updatedAt: now(),
-          content: '<div>⚠️ 冲突副本（另一台设备也同时改了这条）</div>' + (local.content || '')
-        });
-        data.notes.push(copy);
-        pendingSync.add(copy.id);
-      }
-      Object.assign(local, incoming);
-      return true;
+    if (!(force || ver(incoming) > ver(local))) return false;
+    // 不打断正在输入的当前笔记（除非对端是删除它）；普通同步下用户下次保存会自然胜出
+    if (incoming.id === view.noteId && document.activeElement === Editor.el && !incoming.deleted) return false;
+    // 冲突保护：本地这条有"还没广播出去"的改动、且内容与对端不同 → 把本地版本留成「冲突副本」，避免丢失
+    // （force 是用户明确要以对端为准，不再留冲突副本）
+    if (!force && pendingSync.has(local.id) && !local.deleted && !incoming.deleted && (local.content || '') !== (incoming.content || '')) {
+      const copy = Object.assign({}, local, {
+        id: genId('n'), syncTs: now(), updatedAt: now(),
+        content: '<div>⚠️ 冲突副本（另一台设备也同时改了这条）</div>' + (local.content || '')
+      });
+      data.notes.push(copy);
+      pendingSync.add(copy.id);
     }
-    return false;
+    Object.assign(local, incoming);
+    return true;
   }
-  function mergeFolder(incoming) {
+  function mergeFolder(incoming, force) {
     if (!incoming || !incoming.id) return false;
     const local = data.folders.find((f) => f.id === incoming.id);
     if (!local) { data.folders.push(incoming); return true; }
-    if (ver(incoming) > ver(local)) { Object.assign(local, incoming); return true; }
+    if (force || ver(incoming) > ver(local)) { Object.assign(local, incoming); return true; }
     return false;
   }
   function applyIncoming(payload) {
+    const force = !!payload.force;
     let changed = false;
-    (payload.folders || []).forEach((f) => { if (mergeFolder(f)) changed = true; });
-    (payload.notes || []).forEach((n) => { if (mergeNote(n)) changed = true; });
+    (payload.folders || []).forEach((f) => { if (mergeFolder(f, force)) changed = true; });
+    (payload.notes || []).forEach((n) => { if (mergeNote(n, force)) changed = true; });
     if (!changed) return;
     if (view.noteId && !findNote(view.noteId)) view.noteId = null;
     saveNow();
@@ -225,6 +226,19 @@
     }
     renderSyncStatus(Sync.getStatus());
     showToast(Sync.getStatus().enabled ? '同步已开启' : '同步已停止');
+  }
+
+  // 以本机为准，强制同步到所有已连接设备（用于同步卡住/删除没传过去时的兜底）
+  function forceSyncFromHere() {
+    if (!Sync.available()) { showToast('请在桌面应用中使用'); return; }
+    const st = Sync.getStatus();
+    if (!st.enabled) { showToast('请先开启同步'); return; }
+    const peerCount = (st.peers || []).length;
+    if (!peerCount) { showToast('还没连接到其它设备，无法强制同步'); return; }
+    if (!confirm('将以【本机】的内容为准，强制同步到已连接的 ' + peerCount + ' 台设备。\n\n对端与本机相同的笔记会被本机版本覆盖，本机已删除的也会在对端删除（不受时间先后影响）。\n对端上本机没有的笔记会保留。\n\n确定继续吗？')) return;
+    saveNow(); // 先把内存里的最新改动纳入
+    const n = Sync.forceSyncAll();
+    showToast(n > 0 ? ('已以本机为准，强制同步到 ' + n + ' 台设备') : '没有可同步的设备');
   }
 
   // ---------- 主题 ----------
@@ -853,6 +867,7 @@
     syncBtn.addEventListener('click', openSyncModal);
     $('syncClose').addEventListener('click', closeSyncModal);
     $('syncToggle').addEventListener('click', toggleSync);
+    $('syncForce').addEventListener('click', forceSyncFromHere);
     syncModal.addEventListener('click', (e) => { if (e.target === syncModal) closeSyncModal(); });
 
     // 拖动分隔线调整列表宽度（编辑区自动填充剩余空间）

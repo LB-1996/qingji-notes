@@ -97,13 +97,36 @@ const Sync = (() => {
     flush();
   }
 
+  // ---- 以本机为准，强制同步给所有已连接设备（对端无视时间戳直接采用本机版本）----
+  function forceSyncAll() {
+    if (!available() || !status.enabled || !hooks) return 0;
+    const peers = (status.peers || []).length;
+    if (!peers) return 0;
+    const data = hooks.getData();
+    api().send(JSON.stringify({ type: 'folders', folders: data.folders || [], force: true }));
+    let batch = [], size = 0;
+    const flush = () => {
+      if (!batch.length) return;
+      api().send(JSON.stringify({ type: 'notes', notes: batch, force: true }));
+      batch = []; size = 0;
+    };
+    (data.notes || []).forEach((n) => {
+      const est = ((n.content || '').length) + 300;
+      if (size + est > 4 * 1024 * 1024 && batch.length) flush();
+      batch.push(n); size += est;
+    });
+    flush();
+    return peers;
+  }
+
   function handleMessage(peerId, dataStr) {
     let msg; try { msg = JSON.parse(dataStr); } catch (_) { return; }
     if (!hooks) return;
-    if (msg.type === 'notes') hooks.applyIncoming({ notes: msg.notes || [] });
-    else if (msg.type === 'folders') hooks.applyIncoming({ folders: msg.folders || [] });
-    else if (msg.type === 'note') hooks.applyIncoming({ notes: [msg.note] });
-    else if (msg.type === 'folder') hooks.applyIncoming({ folders: [msg.folder] });
+    const force = !!msg.force;
+    if (msg.type === 'notes') hooks.applyIncoming({ notes: msg.notes || [], force });
+    else if (msg.type === 'folders') hooks.applyIncoming({ folders: msg.folders || [], force });
+    else if (msg.type === 'note') hooks.applyIncoming({ notes: [msg.note], force });
+    else if (msg.type === 'folder') hooks.applyIncoming({ folders: [msg.folder], force });
   }
 
   // ---- 广播本地改动 ----
@@ -112,7 +135,7 @@ const Sync = (() => {
 
   return {
     init, start, stop, setConfig,
-    broadcastNote, broadcastFolder,
+    broadcastNote, broadcastFolder, forceSyncAll,
     available,
     getConfig: () => Object.assign({}, cfg),
     getStatus: () => status,

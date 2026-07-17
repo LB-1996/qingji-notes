@@ -781,4 +781,19 @@ body {
 .sync-btn-primary:hover { filter: brightness(1.05); }
 .sync-btn-primary.stop { background: var(--danger); color: #fff; }
 
+.sync-btn-force {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px;
+  margin: 0 0 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-secondary);
+  transition: background 0.12s, color 0.12s;
+}
+.sync-btn-force:hover { background: var(--hover); color: var(--text); }
+
 .sync-note { font-size: 12px; color: var(--text-tertiary); line-height: 1.65; margin: 0; }
