@@ -2,6 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 title 轻记 · 更新并打包安装包
+set GIT_TERMINAL_PROMPT=0
 
 echo ============================================
 echo    轻记 · 拉取最新代码，打包成 Windows 安装包
@@ -33,9 +34,7 @@ if errorlevel 1 (
   echo.
   pause
 ) else (
-  echo 正在从 GitHub 拉取最新代码……
-  git pull
-  echo.
+  call :pull_latest
 )
 
 REM ---- 国内镜像加速 ----
@@ -64,9 +63,47 @@ if errorlevel 1 (
 echo.
 echo ============================================
 echo    打包完成！
-echo    安装包在 dist 文件夹里：轻记 Setup 1.0.0.exe
+echo    安装包在 dist 文件夹里：轻记 Setup 1.1.0.exe
 echo    双击它安装，之后就能像普通软件一样打开使用了。
 echo ============================================
 echo.
 if exist dist explorer dist
 pause
+goto :eof
+
+
+REM ================= 子程序：拉取最新代码（官方失败自动换国内镜像）=================
+:pull_latest
+set "BR="
+for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "BR=%%b"
+if "%BR%"=="" set "BR=main"
+
+echo 正在从 GitHub 拉取最新代码（分支 %BR%）……
+git pull --ff-only origin %BR%
+if not errorlevel 1 goto pull_ok
+
+echo.
+echo 官方 GitHub 连不上，自动切换国内镜像重试……
+echo   [1/3] ghfast 镜像……
+git pull --ff-only https://ghfast.top/https://github.com/LB-1996/qingji-notes.git %BR%
+if not errorlevel 1 goto pull_ok
+
+echo   [2/3] kkgithub 镜像……
+git pull --ff-only https://kkgithub.com/LB-1996/qingji-notes.git %BR%
+if not errorlevel 1 goto pull_ok
+
+echo   [3/3] gitclone 镜像……
+git pull --ff-only https://gitclone.com/github.com/LB-1996/qingji-notes.git %BR%
+if not errorlevel 1 goto pull_ok
+
+echo.
+echo [注意] 官方和所有镜像暂时都连不上（网络不稳定）。
+echo        本次先用你电脑上现有的代码继续打包，只是可能不是最新。
+echo        过一会儿网络好点，再双击本脚本即可更新到最新。
+echo.
+goto :eof
+
+:pull_ok
+echo ✅ 代码已是最新。
+echo.
+goto :eof

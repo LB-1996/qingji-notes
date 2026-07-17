@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('notesAPI', {
   // 平台信息（用于界面上的细节适配）
   platform: process.platform,
   isElectron: true,
+  // 应用版本号（界面右下角显示）
+  appVersion: (() => { try { return ipcRenderer.sendSync('app:version-sync'); } catch (_) { return ''; } })(),
   // 菜单栏动作（新建、搜索、切换主题等）转发给界面
   onMenuAction: (callback) => {
     const channels = ['menu:new-note', 'menu:new-folder', 'menu:search', 'menu:toggle-theme'];

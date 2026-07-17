@@ -1,6 +1,6 @@
 {
   "name": "qingji-notes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "轻记 — 一个类似苹果备忘录的桌面笔记应用（Windows / macOS）",
   "main": "src/main/main.js",
   "author": "",
@@ -50,7 +50,32 @@
       "shortcutName": "轻记"
     },
     "mac": {
-      "target": "dmg"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "identity": null,
+      "artifactName": "轻记-${version}-arm64.${ext}"
+    },
+    "dmg": {
+      "title": "轻记",
+      "contents": [
+        {
+          "x": 140,
+          "y": 200
+        },
+        {
+          "x": 400,
+          "y": 200,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     }
   }
 }

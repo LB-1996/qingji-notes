@@ -245,6 +245,14 @@ body {
   transition: background 0.1s;
 }
 .theme-btn:hover { background: var(--hover); color: var(--text); }
+.app-version {
+  padding: 4px 9px 2px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0.55;
+  user-select: none;
+}
+.app-version:empty { display: none; }
 
 /* ============ 中栏：笔记列表 ============ */
 .list-pane {

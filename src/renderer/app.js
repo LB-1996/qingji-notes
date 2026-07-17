@@ -1037,6 +1037,12 @@
   // ---------- 启动 ----------
   async function init() {
     applyTheme(currentTheme());
+    // 显示版本号（右下角），便于区分当前用的是哪个版本
+    const verEl = document.getElementById('appVersion');
+    if (verEl) {
+      const v = (window.notesAPI && window.notesAPI.appVersion) || '';
+      verEl.textContent = v ? 'v' + v : '';
+    }
     // 恢复边栏收起状态（加载时不播放动画，避免闪一下）
     appEl.classList.add('no-anim');
     if (localStorage.getItem('qingji-sidebar') === '1') {

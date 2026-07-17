@@ -93,6 +93,11 @@ ipcMain.on('data:save-sync', (event, data) => {
   event.returnValue = writeDataSync(data);
 });
 
+// 应用版本号（界面上显示，便于区分版本）
+ipcMain.on('app:version-sync', (event) => {
+  event.returnValue = app.getVersion();
+});
+
 // ===== 局域网同步 =====
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
