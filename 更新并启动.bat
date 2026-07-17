@@ -24,7 +24,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
-REM ---- 必须是 git clone 的文件夹才能自动更新 ----
 git rev-parse --is-inside-work-tree >nul 2>nul
 if errorlevel 1 (
   echo [注意] 当前文件夹不是用 git clone 下载的，无法自动更新！
@@ -34,14 +33,12 @@ if errorlevel 1 (
   echo.
   pause
 ) else (
-  call :pull_latest
+  call :update_code
 )
 
-REM ---- 国内镜像加速 ----
 set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/
 
-REM ---- 每次都装/更新依赖（新版本可能新增依赖，如局域网同步用到的库）----
 echo 正在检查并安装依赖（首次或有更新时会下载，请稍候）……
 call npm install --registry=https://registry.npmmirror.com
 if errorlevel 1 (
@@ -57,44 +54,41 @@ echo.
 call npm start
 if errorlevel 1 (
   echo.
-  echo [提示] 应用已退出。如果是异常退出，请把上面的信息发我。
+  echo [提示] 应用已退出。如异常退出，请把上面的信息发我。
   pause
 )
 goto :eof
 
 
-REM ================= 子程序：拉取最新代码（官方失败自动换国内镜像）=================
-:pull_latest
+REM ===== 更新代码：官方连不上就自动换国内镜像；用 fetch + reset --hard 强制对齐远端， =====
+REM =====          避免换行符等本地噪音导致"拉不到代码"。                              =====
+:update_code
 set "BR="
 for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "BR=%%b"
 if "%BR%"=="" set "BR=main"
+echo 正在从 GitHub 获取最新代码（分支 %BR%）……
 
-echo 正在从 GitHub 拉取最新代码（分支 %BR%）……
-git pull --ff-only origin %BR%
-if not errorlevel 1 goto pull_ok
-
+call :fetch_reset origin
+if not errorlevel 1 goto update_ok
+echo    官方连不上，改用国内镜像重试……
+call :fetch_reset https://ghfast.top/https://github.com/LB-1996/qingji-notes.git
+if not errorlevel 1 goto update_ok
+call :fetch_reset https://kkgithub.com/LB-1996/qingji-notes.git
+if not errorlevel 1 goto update_ok
+call :fetch_reset https://gitclone.com/github.com/LB-1996/qingji-notes.git
+if not errorlevel 1 goto update_ok
+echo [注意] 官方和所有镜像暂时都连不上（网络不稳定），本次用现有代码继续。
 echo.
-echo 官方 GitHub 连不上，自动切换国内镜像重试……
-echo   [1/3] ghfast 镜像……
-git pull --ff-only https://ghfast.top/https://github.com/LB-1996/qingji-notes.git %BR%
-if not errorlevel 1 goto pull_ok
-
-echo   [2/3] kkgithub 镜像……
-git pull --ff-only https://kkgithub.com/LB-1996/qingji-notes.git %BR%
-if not errorlevel 1 goto pull_ok
-
-echo   [3/3] gitclone 镜像……
-git pull --ff-only https://gitclone.com/github.com/LB-1996/qingji-notes.git %BR%
-if not errorlevel 1 goto pull_ok
-
-echo.
-echo [注意] 官方和所有镜像暂时都连不上（网络不稳定）。
-echo        本次先用你电脑上现有的代码继续，不影响使用，只是可能不是最新。
-echo        过一会儿网络好点，再双击本脚本即可更新到最新。
+goto :eof
+:update_ok
+echo ✅ 代码已更新到最新。
 echo.
 goto :eof
 
-:pull_ok
-echo ✅ 代码已是最新。
-echo.
-goto :eof
+REM 参数1=远程地址；抓取后硬对齐到远端最新提交（会丢弃本地对代码的改动——正常使用不该有）
+:fetch_reset
+git fetch "%~1" %BR%
+if errorlevel 1 exit /b 1
+git reset --hard FETCH_HEAD >nul 2>nul
+if errorlevel 1 exit /b 1
+exit /b 0
