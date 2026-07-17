@@ -695,6 +695,9 @@ body {
   justify-content: center;
   z-index: 400;
 }
+/* 带 hidden 属性时必须隐藏：上面的 display:flex 会盖过浏览器对 [hidden] 的默认 display:none，
+   所以这里显式补一条（选择器带 [hidden]，优先级更高），否则弹窗关不掉、且一启动就显示。 */
+.modal-overlay[hidden] { display: none; }
 .modal {
   width: 420px;
   max-width: calc(100vw - 32px);
