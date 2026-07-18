@@ -190,7 +190,25 @@ const Editor = (() => {
     });
     el.focus();
     restoreSelection();
-    document.execCommand('insertHTML', false, tmp.innerHTML);
+    // execCommand('insertHTML') 对大量元素是 O(n²)，粘贴长富文本会卡死几十秒到几分钟。
+    // 内容大时改用 Range 直接插入 DOM 片段（O(n)，毫秒级）；内容小时仍用 execCommand 以保留撤销。
+    const count = tmp.querySelectorAll('*').length;
+    if (count > 200 || (html && html.length > 40000)) {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount) {
+        const range = sel.getRangeAt(0);
+        range.deleteContents();
+        const frag = document.createDocumentFragment();
+        let last = null;
+        while (tmp.firstChild) last = frag.appendChild(tmp.firstChild);
+        range.insertNode(frag);
+        if (last) { range.setStartAfter(last); range.collapse(true); sel.removeAllRanges(); sel.addRange(range); }
+      } else {
+        while (tmp.firstChild) el.appendChild(tmp.firstChild);
+      }
+    } else {
+      document.execCommand('insertHTML', false, tmp.innerHTML);
+    }
     saveSelection();
     onChange();
   }
