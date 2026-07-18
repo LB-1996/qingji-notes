@@ -211,6 +211,20 @@
   }
   function closeSyncModal() { syncModal.hidden = true; }
 
+  // ---------- 图片放大预览（灯箱）----------
+  function openLightbox(src) {
+    if (!src) return;
+    const box = $('lightbox');
+    if (!box) return;
+    $('lightboxImg').src = src;
+    box.hidden = false;
+    try { window.getSelection().removeAllRanges(); } catch (_) {}
+  }
+  function closeLightbox() {
+    const box = $('lightbox');
+    if (box) { box.hidden = true; $('lightboxImg').src = ''; }
+  }
+
   function toggleSync() {
     if (!Sync.available()) { showToast('请在桌面应用中使用'); return; }
     const running = Sync.getStatus().enabled;
@@ -1009,17 +1023,26 @@
       copyImageToClipboard(img);
     });
 
+    // 点击图片 → 放大预览（灯箱）
+    Editor.el.addEventListener('click', (e) => {
+      if (e.target && e.target.tagName === 'IMG') openLightbox(e.target.currentSrc || e.target.src);
+    });
+
     // 把图片拖到其它应用（微信、访达等）→ 走 Electron 原生拖拽，拖出真的图片文件
+    let ownImageDragUntil = 0; // 正在把"自己的图片"往外拖的时间窗，用于抑制编辑区的"松开以插入"提示
     Editor.el.addEventListener('dragstart', (e) => {
       if (e.target && e.target.tagName === 'IMG' &&
           window.notesAPI && window.notesAPI.image && window.notesAPI.image.startDrag) {
+        ownImageDragUntil = Date.now() + 5000;
         e.preventDefault();
         window.notesAPI.image.startDrag(e.target.currentSrc || e.target.src);
       }
     });
+    document.addEventListener('dragend', () => { ownImageDragUntil = 0; });
 
-    // 拖拽图片到编辑区
+    // 拖拽图片到编辑区（仅当从外部拖入文件时提示插入；拖自己的图出去不提示、也不重复插回）
     editorPaneEl.addEventListener('dragover', (e) => {
+      if (Date.now() < ownImageDragUntil) return;
       if (e.dataTransfer && Array.from(e.dataTransfer.types).includes('Files')) {
         e.preventDefault();
         editorPaneEl.classList.add('drag-over');
@@ -1030,6 +1053,7 @@
     });
     editorPaneEl.addEventListener('drop', async (e) => {
       editorPaneEl.classList.remove('drag-over');
+      if (Date.now() < ownImageDragUntil) { ownImageDragUntil = 0; return; }
       if (e.dataTransfer && e.dataTransfer.files.length) {
         e.preventDefault();
         // 把光标定位到拖放落点，图片就插在鼠标松开的位置，而不是上次的光标处
@@ -1050,8 +1074,11 @@
       if (!contextMenu.hidden && !contextMenu.contains(e.target)) hideContextMenu();
       if (!formatPopover.hidden && !formatPopover.contains(e.target) && !e.target.closest('[data-cmd="format"]')) hidePopover();
     });
+    // 点击灯箱任意处关闭
+    const lb = $('lightbox');
+    if (lb) lb.addEventListener('click', closeLightbox);
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { hideContextMenu(); hidePopover(); if (!syncModal.hidden) closeSyncModal(); }
+      if (e.key === 'Escape') { hideContextMenu(); hidePopover(); if (!syncModal.hidden) closeSyncModal(); if (lb && !lb.hidden) closeLightbox(); }
       // Ctrl/Cmd + \ 收起/展开边栏（Electron 与浏览器都可用，无菜单冲突）
       if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
     });

@@ -708,6 +708,21 @@ body {
 /* 带 hidden 属性时必须隐藏：上面的 display:flex 会盖过浏览器对 [hidden] 的默认 display:none，
    所以这里显式补一条（选择器带 [hidden]，优先级更高），否则弹窗关不掉、且一启动就显示。 */
 .modal-overlay[hidden] { display: none; }
+
+/* 图片放大预览（灯箱）*/
+.lightbox {
+  position: fixed; inset: 0; z-index: 600;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.86); cursor: zoom-out;
+}
+.lightbox[hidden] { display: none; }
+.lightbox-img { max-width: 92vw; max-height: 92vh; object-fit: contain; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.lightbox-close {
+  position: absolute; top: 20px; right: 26px; width: 38px; height: 38px; border-radius: 50%;
+  border: none; background: rgba(255,255,255,0.12); color: #fff; font-size: 18px; cursor: pointer;
+}
+.lightbox-close:hover { background: rgba(255,255,255,0.25); }
+
 .modal {
   width: 420px;
   max-width: calc(100vw - 32px);

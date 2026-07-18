@@ -1,6 +1,6 @@
 {
   "name": "qingji-notes",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "轻记 — 一个类似苹果备忘录的桌面笔记应用（Windows / macOS）",
   "main": "src/main/main.js",
   "author": "",
