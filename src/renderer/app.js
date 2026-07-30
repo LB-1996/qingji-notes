@@ -328,10 +328,16 @@
     }
     if (box) {
       box.classList.toggle('on', !!st.enabled);
+      const bad = st.codeMismatch || [];   // 局域网里发现了，但同步码和本机不一样
+      box.classList.toggle('warn', !!st.enabled && !peers.length && bad.length > 0);
       if (!st.enabled) box.textContent = '未开启';
-      else if (!peers.length) box.innerHTML = '已开启 · 正在局域网内查找其它设备……' + portHint(st);
-      else box.innerHTML = '已连接 ' + peers.length + ' 台设备：' +
+      else if (peers.length) box.innerHTML = '已连接 ' + peers.length + ' 台设备：' +
         peers.map((p) => '<span class="sync-peer">🖥 ' + escapeHtml(p.name || '设备') + '</span>').join('') + portHint(st);
+      // 码对不上时明确说出来 —— 以前这里只会一直显示"正在查找"，用户根本不知道是码填错了
+      else if (bad.length) box.innerHTML = '⚠️ 找到 ' + bad.length + ' 台设备，但<b>同步码和本机不一样</b>，连不上：' +
+        bad.map((p) => '<span class="sync-peer">🖥 ' + escapeHtml(p.name || '设备') + '</span>').join('') +
+        '<div class="sync-tip" style="margin-top:6px">请把两台的「同步码」改成完全相同的一串（区分大小写、别多打空格或符号），再各自点一次「停止同步」→「开启同步」。</div>' + portHint(st);
+      else box.innerHTML = '已开启 · 正在局域网内查找其它设备……' + portHint(st);
     }
   }
   function portHint(st) {

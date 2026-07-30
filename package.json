@@ -1,6 +1,6 @@
 {
   "name": "qingji-notes",
-  "version": "1.7.0",
+  "version": "1.7.2",
   "description": "轻记 — 一个类似苹果备忘录的桌面笔记应用（Windows / macOS）",
   "main": "src/main/main.js",
   "author": "",
@@ -51,6 +51,13 @@
       "shortcutName": "轻记"
     },
     "mac": {
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "「轻记」需要访问本地网络，才能在同一 WiFi 下发现你的其它设备并互相同步备忘录。数据只在你的设备之间直连，不会上传到任何服务器。",
+        "NSBonjourServices": [
+          "_qingjisync._tcp",
+          "_qingjisync._udp"
+        ]
+      },
       "target": [
         {
           "target": "dmg",

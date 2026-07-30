@@ -156,6 +156,22 @@ ipcMain.handle('sync:status', () => sync.getStatus());
 ipcMain.on('sync:send', (_e, data) => sync.broadcast(data));
 ipcMain.on('sync:send-to', (_e, payload) => sync.sendTo(payload.peerId, payload.data));
 
+// ===== 兜底：别让一次网络抖动弹出"主进程发生 JavaScript 错误"并让应用不可用 =====
+// 局域网同步天生要碰网络：切 Wi-Fi、睡眠唤醒、多网卡、VPN 上下线都可能让底层 socket 抛错。
+// 对一个记笔记的应用来说，"继续跑着、把错误记到日志"远比弹个致命弹窗要好 —— 弹窗一出，
+// 用户没保存的编辑就悬着了。这里只兜底，不掩盖：所有异常都会打到控制台。
+const BENIGN_NET_CODES = ['EHOSTUNREACH', 'ENETUNREACH', 'ENETDOWN', 'EADDRNOTAVAIL',
+  'ECONNRESET', 'EPIPE', 'ECONNREFUSED', 'ETIMEDOUT', 'EPERM', 'EACCES', 'EADDRINUSE'];
+process.on('uncaughtException', (err) => {
+  const code = (err && err.code) || '';
+  if (BENIGN_NET_CODES.includes(code)) {
+    console.log('[net] 忽略网络异常：' + code + ' ' + ((err && err.message) || ''));
+    return;
+  }
+  console.error('[未捕获异常]', err);   // 其它异常照样记下来，但不弹窗、不退出
+});
+process.on('unhandledRejection', (reason) => console.error('[未处理的 Promise 拒绝]', reason));
+
 // ===== 应用生命周期 =====
 app.whenReady().then(() => {
   deviceId = loadDeviceId();

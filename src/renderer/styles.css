@@ -792,6 +792,14 @@ body {
   margin-bottom: 14px;
 }
 .sync-status.on { color: var(--text); }
+/* 同步码对不上时的警示态 —— 让人一眼看出不是"还在找"，是码填错了 */
+.sync-status.warn {
+  color: var(--text);
+  background: rgba(255, 149, 0, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 149, 0, 0.35);
+}
+.sync-status.warn .sync-peer { background: rgba(255, 149, 0, 0.18); color: #b26a00; }
+:root[data-theme="dark"] .sync-status.warn .sync-peer { color: #ffb340; }
 .sync-status .sync-peer {
   display: inline-flex;
   align-items: center;
