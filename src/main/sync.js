@@ -12,6 +12,7 @@ const MAX_PAYLOAD = 128 * 1024 * 1024; // 128MB，容纳带图片的笔记
 const RETRY_MS = 4000;
 const MDNS_RETRY_MS = 10000;  // mDNS 出错后隔多久重建发现服务（按次数递增退避）
 const MDNS_MAX_RETRIES = 3;   // 最多重建几次，避免反复拆建反而发现不了对端
+const PASSIVE_WAIT_MS = 12000; // 让对方先拨的礼让时间；超过就自己上（见 _tick）
 
 function safeDecode(s) { try { return decodeURIComponent(s || ''); } catch (_) { return String(s || ''); } }
 
@@ -189,7 +190,7 @@ class SyncService extends EventEmitter {
   _addTarget(key, address, port, manual, peerId) {
     const ex = this.targets.get(key);
     if (ex) { ex.address = address; ex.port = port; }
-    else this.targets.set(key, { address, port, manual, dialing: false, ws: null, peerId: peerId || null });
+    else this.targets.set(key, { address, port, manual, dialing: false, ws: null, peerId: peerId || null, politeSince: 0 });
   }
 
   // 尝试连接所有"该连但还没连上"的目标
@@ -198,7 +199,15 @@ class SyncService extends EventEmitter {
     this.targets.forEach((t, key) => {
       if (t.ws || t.dialing) return;
       if (t.peerId && this.peers.has(t.peerId)) return;         // 已通过其它连接连上
-      if (!t.manual && this.deviceId >= key) return;            // mDNS：只让较小 deviceId 主动拨号
+      // mDNS 发现的目标：正常只让较小 deviceId 主动拨号，避免两边同时拨出一堆重复连接。
+      // 但这会留下一个单点 —— 万一"该拨号的那一方"连不出去（防火墙、macOS 的
+      // 「本地网络」权限没给、VPN 抢路由……），另一方就算完全正常也只会干等，
+      // 整对设备永远连不上。所以礼让一段时间后，本机也主动拨。
+      // 两边同时拨也没关系：_addPeer 会把重复的那条关掉，最终只留一条。
+      if (!t.manual && this.deviceId >= key) {
+        if (!t.politeSince) t.politeSince = Date.now();
+        if (Date.now() - t.politeSince < PASSIVE_WAIT_MS) return;
+      }
       this._dial(key, t);
     });
   }
@@ -259,6 +268,9 @@ class SyncService extends EventEmitter {
 
   _removePeerByWs(ws) {
     const id = ws._peerId;
+    // 断开后重新开始礼让计时：正常情况下仍然只有较小 deviceId 那方主动重连
+    const t = id && this.targets.get(id);
+    if (t) t.politeSince = 0;
     if (id && this.peers.get(id) && this.peers.get(id).ws === ws) {
       this.peers.delete(id);
       this.emit('status', this.getStatus());
