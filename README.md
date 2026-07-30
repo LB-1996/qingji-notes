@@ -39,11 +39,15 @@
 | 我想做什么 | Windows 双击 | Mac 双击 |
 |---|---|---|
 | **运行应用** | `启动.bat` | `启动-Mac.command` |
-| **拉取最新代码并运行** | `更新并启动.bat` | —— |
-| **拉取最新代码并打包安装包** | `更新并打包.bat` | —— |
-| **打包成 Windows 安装包** | `打包Windows安装包.bat` | —— |
+| **拉取最新代码并运行** | `更新并启动.bat` | `更新并启动-Mac.command` |
+| **拉取最新代码并打包** | `更新并打包.bat` | `更新并打包-Mac.command` |
+| **打包安装包** | `打包Windows安装包.bat`（.exe） | `打包Mac.command`（.dmg） |
 
-> 用 `更新并启动.bat` 需要先装 [Git](https://git-scm.com/download/win)，并用 `git clone https://github.com/LB-1996/qingji-notes.git` 把项目拉下来一次；之后每次双击它就会自动拉取最新代码再启动。
+> 「更新并…」这两个脚本需要先装 Git（Windows 去 [git-scm.com](https://git-scm.com/download/win)；Mac 在终端里执行 `xcode-select --install`）。**不用**先手动 clone —— 就算你是从网页下载的 ZIP 源码包，脚本第一次运行会自动把文件夹变成可更新的仓库；之后每次双击就会自动拉最新代码。官方 GitHub 连不上时会自动换国内镜像重试，全都连不上就用现有代码继续，不会卡住。
+
+> Mac 打包出来的是 `dist/轻记-<版本>-arm64.dmg`（Apple 芯片）。双击 dmg，把「轻记」拖进「应用程序」即可；也能直接用 `dist/mac-arm64/轻记.app`。Intel 芯片的 Mac 需要把 `package.json` 里 `build.mac.target` 的 `arch` 改成 `x64`，脚本检测到 Intel 会提示你。
+
+> ⚠️ Mac 首次打开打包出来的 App 会提示「无法验证开发者」（因为没做代码签名）—— 右键点 App 选「打开」，或到「系统设置 → 隐私与安全性」里点「仍要打开」即可。
 
 > ⚠️ **换电脑传输时，不要拷贝 `node_modules` 文件夹**：它跟操作系统绑定（含各系统专属的二进制和符号链接），跨系统会解压报错、无法启动。只传源码即可，脚本会在新电脑上自动重装依赖；若已误拷，启动脚本也会自动识别并清理重装。
 
@@ -52,16 +56,31 @@
 ```bash
 npm install
 npm start          # 运行
-npm run build:win  # 在 Windows 上打包出安装包
+npm run build:win  # 在 Windows 上打包出 .exe 安装包
+npm run build:mac  # 在 Mac 上打包出 .dmg 安装镜像
 ```
 
-## 📦 打包成 Windows 安装包（.exe）
+## 📦 打包成安装包
 
-产物是标准 Windows 安装程序 `dist/轻记 Setup 1.0.0.exe`，双击即可安装。三种方式：
+### Windows（.exe）
+
+产物是标准 Windows 安装程序 `dist/轻记 Setup <版本>.exe`，双击即可安装。三种方式：
 
 1. **在任意 Windows 电脑上**：双击 `打包Windows安装包.bat`（或 `npm run build:win`）。
 2. **用 GitHub Actions 云端打包**（只有 Mac 的人推荐）：推到 GitHub 后，在 **Actions** 里手动运行 **Build Windows Installer**，跑完在 Artifacts 下载。
 3. **在 Mac 上交叉打包**：需先 `brew install --cask wine-stable`，再 `npm run build:win`。
+
+### macOS（.dmg）
+
+产物是 `dist/轻记-<版本>-arm64.dmg`（Apple 芯片）。两种方式：
+
+1. **双击 `打包Mac.command`** —— 只打包当前代码。
+2. **双击 `更新并打包-Mac.command`** —— 先从 GitHub 拉最新代码再打包（推荐）。
+
+打完会自动打开 `dist` 文件夹。双击 dmg，把「轻记」拖进「应用程序」即可；也能直接运行 `dist/mac-arm64/轻记.app`。
+
+- 没做代码签名，首次打开会提示「无法验证开发者」：**右键点 App → 打开**，或到「系统设置 → 隐私与安全性」点「仍要打开」。
+- Intel 芯片的 Mac 要把 `package.json` 里 `build.mac.target` 的 `arch` 从 `arm64` 改成 `x64`。
 
 ## 🎨 换应用图标
 
