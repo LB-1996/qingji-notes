@@ -33,6 +33,7 @@
       "logo.ico",
       "logo.png"
     ],
+    "afterPack": "scripts/sign-adhoc.js",
     "win": {
       "target": [
         {
