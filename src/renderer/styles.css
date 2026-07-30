@@ -28,6 +28,8 @@
   --search-bg: rgba(0, 0, 0, 0.06);
   --scroll-thumb: rgba(0, 0, 0, 0.22);
   --danger: #ff453a;
+  --status-doing: #007aff;
+  --status-done: #34c759;
 }
 
 :root[data-theme="dark"] {
@@ -51,6 +53,8 @@
   --search-bg: rgba(255, 255, 255, 0.08);
   --scroll-thumb: rgba(255, 255, 255, 0.22);
   --danger: #ff6961;
+  --status-doing: #4aa8ff;
+  --status-done: #30d158;
 }
 
 * {
@@ -401,6 +405,16 @@ body {
   align-items: center;
   gap: 5px;
 }
+.note-list-group-label .gl-ico { display: inline-flex; }
+.note-list-group-label.gl-doing .gl-ico { color: var(--status-doing); }
+.note-list-group-label.gl-done .gl-ico { color: var(--status-done); }
+
+/* ---- 备忘录状态：进行中 / 已完成（默认状态不显示图标）---- */
+.note-item .ni-status { display: inline-flex; flex-shrink: 0; }
+.note-item.st-doing .ni-status { color: var(--status-doing); }
+.note-item.st-done .ni-status { color: var(--status-done); }
+/* 已完成的标题淡一点，一眼能区分出"做完了" */
+.note-item.st-done .ni-title { color: var(--text-secondary); }
 .list-empty {
   text-align: center;
   color: var(--text-tertiary);
@@ -430,6 +444,11 @@ body {
   min-height: 46px;
 }
 .tb-group { display: flex; align-items: center; gap: 1px; -webkit-app-region: no-drag; }
+/* 编辑区变窄时优先挤压左边的排版按钮，保证右侧「拉取 / 同步 / 置顶 / 删除」始终点得到。
+   注意不能给 .editor-toolbar 加 overflow:hidden —— 文字样式弹出面板挂在它里面，会被裁掉。 */
+.tb-group.tb-edit { min-width: 0; overflow: hidden; }
+.tb-group.tb-actions { flex-shrink: 0; }
+.editor-toolbar > .tb-sep { flex-shrink: 0; }
 .tb-spacer { flex: 1; -webkit-app-region: drag; }
 .tb-sep { width: 1px; height: 20px; background: var(--border-strong); margin: 0 7px; }
 
@@ -460,11 +479,17 @@ body {
 .tb-btn:disabled { opacity: 0.35; cursor: default; }
 .tb-btn:disabled:hover { background: transparent; color: var(--text-secondary); }
 
-/* 立即同步按钮：用强调色着色，便于随时找到 */
-.tb-sync { color: var(--accent-strong); }
-.tb-sync:hover { background: var(--hover-strong); color: var(--accent-strong); }
+/* 立即同步 / 拉取按钮：用强调色着色，便于随时找到 */
+.tb-sync, .tb-pull { color: var(--accent-strong); }
+.tb-sync:hover, .tb-pull:hover { background: var(--hover-strong); color: var(--accent-strong); }
 .tb-sync.syncing { animation: tb-sync-spin 0.6s linear; }
 @keyframes tb-sync-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+.tb-pull.pulling { animation: tb-pull-drop 0.55s ease; }
+@keyframes tb-pull-drop {
+  0% { transform: translateY(-4px); }
+  55% { transform: translateY(3px); }
+  100% { transform: translateY(0); }
+}
 
 /* 文字样式弹出面板 */
 .popover {
@@ -645,6 +670,19 @@ body {
 }
 .context-menu button:hover { background: var(--hover-strong); }
 .context-menu button.danger { color: var(--danger); }
+/* 状态单选项：左边留出对勾位，当前生效的那个显示 ✓ */
+.context-menu button.cm-radio { gap: 6px; }
+.context-menu .cm-check {
+  width: 12px;
+  flex-shrink: 0;
+  color: var(--accent-strong);
+  font-size: 12px;
+  visibility: hidden;
+}
+.context-menu .cm-check.on { visibility: visible; }
+.context-menu .cm-ico { display: inline-flex; align-items: center; width: 13px; flex-shrink: 0; }
+.context-menu .cm-ico-doing { color: var(--status-doing); }
+.context-menu .cm-ico-done { color: var(--status-done); }
 .context-menu .cm-sep { height: 1px; background: var(--border); margin: 4px 6px; }
 
 /* 轻提示 toast */

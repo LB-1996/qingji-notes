@@ -6,10 +6,28 @@
   const TRASH_KEEP_DAYS = 30;
   const TOMBSTONE_KEEP_DAYS = 90; // 删除墓碑保留多久后真正移除
 
+  // 备忘录状态（note.status）：'' 默认 / 'doing' 进行中 / 'done' 已完成。
+  // 排序权重：置顶 4 > 进行中 3 > 已完成 2 > 默认 1；置顶是独立开关，与状态可以并存。
+  const STATUS_META = {
+    doing: { label: '进行中', weight: 3 },
+    done:  { label: '已完成', weight: 2 }
+  };
+  const noteStatus = (n) => (n && STATUS_META[n.status] ? n.status : '');
+  function noteWeight(n) {
+    if (n && n.pinned) return 4;
+    const m = STATUS_META[noteStatus(n)];
+    return m ? m.weight : 1;
+  }
+
   let data = { version: 1, folders: [], notes: [] };
   const view = { folderId: SPECIAL.ALL, noteId: null, query: '' };
   let saveTimer = null;
   const pendingSync = new Set(); // 待广播到其它设备的笔记 id
+  // 打字过程中收到的对端版本先存这里，停手后自动合并 —— 绝不丢弃
+  const deferred = new Map();    // noteId -> 对端版本
+  let deferTimer = null;
+  let lastTypeAt = 0;            // 最后一次敲键盘的时间，用来判断"正在输入"
+  let lastRemoteHintAt = 0;
 
   // ---------- DOM ----------
   const $ = (id) => document.getElementById(id);
@@ -36,6 +54,7 @@
   const syncBtn = $('syncBtn');
   const syncDot = $('syncDot');
   const syncModal = $('syncModal');
+  const editorScrollEl = $('editorScroll');
 
   // ---------- 工具函数 ----------
   const now = () => Date.now();
@@ -126,47 +145,165 @@
     }
   }
 
-  // ---------- 同步：合并来自其它设备的改动（LWW，按 syncTs）----------
+  // ---------- 同步：版本戳 ----------
+  // syncTs  这一版的版本号（毫秒时间戳）
+  // syncBase 这一版是"从哪个版本改出来的"（上一次与其它设备对齐的版本号）
+  // syncSrc  这一版由哪台设备写的
+  // 有了 base + src 就能分清「对端比我新」和「两台同时各改了一次」，后者两份都留下。
   function ver(x) { return (x && (x.syncTs || x.updatedAt)) || 0; }
+  const myId = () => (Sync && Sync.getDeviceId && Sync.getDeviceId()) || '';
+  function bumpSync(item) {
+    if (!item) return item;
+    if (item.syncBase == null) item.syncBase = ver(item); // 记住这轮改动的起点版本
+    item.syncTs = now();
+    item.syncSrc = myId();
+    return item;
+  }
+
+  // 正在这台电脑上敲字？（窗口在后台时 activeElement 仍是编辑器，所以必须一起看 hasFocus + 最近击键）
+  function editorFocused() { return document.hasFocus() && document.activeElement === Editor.el; }
+  function isTyping() { return editorFocused() && (now() - lastTypeAt) < 1500; }
+
+  // 两个版本是"各自独立改出来的"（而不是一个从另一个改出来的）
+  function isConcurrent(local, incoming) {
+    const ls = local.syncSrc || '', rs = incoming.syncSrc || '';
+    if (ls && rs && ls === rs) return false;            // 同一台设备的连续修改 → 线性历史
+    const lb = local.syncBase || 0, rb = incoming.syncBase || 0;
+    if (!lb || !rb) return pendingSync.has(local.id);   // 旧数据没有基线 → 退回"本机有未发出的改动"判断
+    return rb < ver(local) && lb < ver(incoming);       // 谁都不是谁的后代 → 真并发
+  }
+
+  // 冲突副本：两台设备同时改了同一条时，把"落选"的那一份单独存成一条，保证内容不丢。
+  // 提示语两端完全一致，这样对端把副本传回来时能靠内容判重，不会越滚越多。
+  const CONFLICT_BANNER = '<div>⚠️ 冲突副本（两台设备同时改了这条，两份都已保留）</div>';
+  function pushConflictCopy(src) {
+    const content = CONFLICT_BANNER + (src.content || '');
+    if (data.notes.some((n) => !n.deleted && (n.content || '') === content)) return null; // 已有一模一样的副本
+    const copy = Object.assign({}, src, {
+      id: genId('n'), content, pinned: false, trashed: false, trashedAt: null,
+      syncTs: now(), syncBase: now(), syncSrc: myId()
+    });
+    delete copy.deleted; delete copy.deletedAt;
+    data.notes.push(copy);
+    pendingSync.add(copy.id);
+    return copy;
+  }
+
+  function hintRemoteEditing(from) {
+    if (now() - lastRemoteHintAt < 10000) return;
+    lastRemoteHintAt = now();
+    showToast((from || '另一台设备') + '也在改这条，停手后会自动合并');
+  }
+
+  // ---------- 同步：合并来自其它设备的改动 ----------
   // force=true：来自「以本机为准」强制同步，无视时间戳直接采用对端(发起方)的版本
-  function mergeNote(incoming, force) {
+  // 返回 true 表示本机数据被改动了
+  function mergeNote(incoming, force, from) {
     if (!incoming || !incoming.id) return false;
     const local = findNoteRaw(incoming.id);
     if (!local) { data.notes.push(incoming); return true; }
-    if (!(force || ver(incoming) > ver(local))) return false;
-    // 不打断正在输入的当前笔记（除非对端是删除它）；普通同步下用户下次保存会自然胜出
-    if (incoming.id === view.noteId && document.activeElement === Editor.el && !incoming.deleted) return false;
-    // 冲突保护：本地这条有"还没广播出去"的改动、且内容与对端不同 → 把本地版本留成「冲突副本」，避免丢失
-    // （force 是用户明确要以对端为准，不再留冲突副本）
-    if (!force && pendingSync.has(local.id) && !local.deleted && !incoming.deleted && (local.content || '') !== (incoming.content || '')) {
-      const copy = Object.assign({}, local, {
-        id: genId('n'), syncTs: now(), updatedAt: now(),
-        content: '<div>⚠️ 冲突副本（另一台设备也同时改了这条）</div>' + (local.content || '')
-      });
-      data.notes.push(copy);
-      pendingSync.add(copy.id);
+
+    const differs = (local.content || '') !== (incoming.content || '');
+    const newer = ver(incoming) > ver(local);
+    const alive = !local.deleted && !incoming.deleted;
+
+    // 真并发：两台设备各自改了同一条 → 不管谁的时间戳新，两份内容都留下
+    if (!force && differs && alive && isConcurrent(local, incoming)) {
+      if (newer && !editorFocused()) {
+        // 对端更新，且用户没盯着这条 → 采用对端版本，本机这版存成副本
+        pushConflictCopy(local);
+        Object.assign(local, incoming);
+        local.syncBase = ver(incoming);
+        pendingSync.delete(local.id);
+      } else {
+        // 本机更新，或用户正看着/正在编辑这条 → 眼前内容不动，把对端版本存成副本
+        pushConflictCopy(incoming);
+        local.syncBase = Math.max(local.syncBase || 0, ver(incoming));
+        local.syncTs = now();          // 顶一下版本，让本机这版继续往外传，双方最终一致
+        local.syncSrc = myId();
+        pendingSync.add(local.id);
+        if (view.noteId === local.id) hintRemoteEditing(from);
+      }
+      return true;
     }
+
+    if (!(force || newer)) return false;
+
+    // 强制同步（以对端为准）会盖掉本机内容：本机还有没发出去的改动就先留一份副本，别把用户刚写的抹掉
+    if (force && differs && alive && pendingSync.has(local.id)) pushConflictCopy(local);
+
+    // 正在这条上打字 → 先存着，停手后自动合并（删除操作不等待，立即生效）
+    if (!force && differs && !incoming.deleted && isTyping()) {
+      deferred.set(incoming.id, incoming);
+      scheduleDeferredFlush();
+      hintRemoteEditing(from);
+      return false;
+    }
+
     Object.assign(local, incoming);
+    local.syncBase = ver(incoming);   // 已与对端对齐
+    pendingSync.delete(local.id);
     return true;
   }
+
   function mergeFolder(incoming, force) {
     if (!incoming || !incoming.id) return false;
     const local = data.folders.find((f) => f.id === incoming.id);
     if (!local) { data.folders.push(incoming); return true; }
-    if (force || ver(incoming) > ver(local)) { Object.assign(local, incoming); return true; }
+    if (force || ver(incoming) > ver(local)) {
+      Object.assign(local, incoming);
+      local.syncBase = ver(incoming);
+      return true;
+    }
     return false;
   }
+
+  // 打字停下来后，把先前存下的对端版本补合进来
+  function scheduleDeferredFlush() {
+    clearTimeout(deferTimer);
+    deferTimer = setTimeout(flushDeferred, 900);
+  }
+  function flushDeferred() {
+    clearTimeout(deferTimer);
+    if (!deferred.size) return;
+    if (isTyping()) { scheduleDeferredFlush(); return; }   // 还在敲，再等一会儿
+    const list = Array.from(deferred.values());
+    deferred.clear();
+    applyIncoming({ notes: list });
+  }
+
+  // 返回本次合并改动了多少条（供「拉取」按钮提示"更新了 N 条"）
   function applyIncoming(payload) {
     const force = !!payload.force;
-    let changed = false;
-    (payload.folders || []).forEach((f) => { if (mergeFolder(f, force)) changed = true; });
-    (payload.notes || []).forEach((n) => { if (mergeNote(n, force)) changed = true; });
-    if (!changed) return;
+    const from = payload.from;
+    // 记下当前这条笔记合并前的样子：只有它真的变了才重设编辑器内容，否则光标会被无端重置
+    const openBefore = findNoteRaw(view.noteId);
+    const beforeContent = openBefore ? (openBefore.content || '') : null;
+    const beforeTrashed = openBefore ? !!openBefore.trashed : null;
+    let changed = 0;
+    (payload.folders || []).forEach((f) => { if (mergeFolder(f, force)) changed++; });
+    (payload.notes || []).forEach((n) => { if (mergeNote(n, force, from)) changed++; });
+    if (!changed) return 0;
+    const openAfter = findNoteRaw(view.noteId);
+    const openChanged = !openAfter || openAfter.deleted ||
+      (openAfter.content || '') !== beforeContent || !!openAfter.trashed !== beforeTrashed;
     if (view.noteId && !findNote(view.noteId)) view.noteId = null;
     saveNow();
     renderFolders();
     renderNoteList();
-    if (document.activeElement !== Editor.el) renderEditor(); // 不在输入时才刷新编辑器
+    refreshEditor(openChanged);
+    return changed;
+  }
+
+  // 刷新编辑器。openNoteChanged=false 时不重设 innerHTML —— 否则每来一条同步消息光标就跳一次。
+  function refreshEditor(openNoteChanged) {
+    const note = findNote(view.noteId);
+    if (!note) { renderEditor(); return; }
+    if (!openNoteChanged) { pinBtn.classList.toggle('active', !!note.pinned); return; }
+    if (isTyping() && !note.trashed) return; // 打字中不打断，deferred 稍后会再来一次
+    const top = editorScrollEl ? editorScrollEl.scrollTop : 0;
+    renderEditor();
+    if (editorScrollEl) editorScrollEl.scrollTop = top;   // 保住阅读位置，别跳回顶部
   }
 
   // ---------- 同步：设置界面 ----------
@@ -260,6 +397,25 @@
   }
   function forceSyncFromHere() { doForceSync(true); }
 
+  // 从其它设备拉取最新内容（按时间新旧合并，不会覆盖本机更新的部分）
+  function doPullNow() {
+    if (!Sync.available()) { showToast('请在桌面应用中使用'); return; }
+    const st = Sync.getStatus();
+    if (!st.enabled) { showToast('同步未开启：请先在左下角「局域网同步」里开启'); return; }
+    if (!(st.peers || []).length) { showToast('还没连接到其它设备'); return; }
+    saveNow();                 // 先把本机内存里的改动落盘并发出去，再拉对端的
+    flushDeferred();
+    const n = Sync.pullAll({ manual: true });
+    const btn = $('pullNowBtn');
+    if (btn && n > 0) { btn.classList.remove('pulling'); void btn.offsetWidth; btn.classList.add('pulling'); }
+    if (n > 0) showToast('正在从 ' + n + ' 台设备拉取最新内容…');
+  }
+  // 拉取结束后的结果提示
+  function onPullDone(res) {
+    const c = (res && res.changed) || 0;
+    showToast(c > 0 ? ('已拉取最新内容，更新了 ' + c + ' 条') : '已是最新，没有需要更新的内容');
+  }
+
   // ---------- 主题 ----------
   function currentTheme() {
     const saved = localStorage.getItem('qingji-theme');
@@ -289,7 +445,10 @@
     all: '<svg viewBox="0 0 24 24" width="17" height="17"><rect x="4" y="3.5" width="16" height="17" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 8.5h8M8 12h8M8 15.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
     folder: '<svg viewBox="0 0 24 24" width="17" height="17"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4l1.6 1.8H19.5A1.5 1.5 0 0 1 21 8.3v9.2a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="currentColor" opacity="0.9"/></svg>',
     trash: '<svg viewBox="0 0 24 24" width="17" height="17"><path d="M4 7h16M9 7V4.8A1.8 1.8 0 0 1 10.8 3h2.4A1.8 1.8 0 0 1 15 4.8V7M6 7l1 12.2A1.8 1.8 0 0 0 8.8 21h6.4a1.8 1.8 0 0 0 1.8-1.8L18 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    pinSmall: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M9 3h6l-1 5 3 3v2h-5v6l-1 1-1-1v-6H4v-2l3-3z" fill="currentColor"/></svg>'
+    pinSmall: '<svg viewBox="0 0 24 24" width="12" height="12"><path d="M9 3h6l-1 5 3 3v2h-5v6l-1 1-1-1v-6H4v-2l3-3z" fill="currentColor"/></svg>',
+    // 进行中：半环（像进度圈走了一半）；已完成：圆圈里打勾
+    doing: '<svg viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>',
+    done: '<svg viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="12" r="9" fill="currentColor"/><path d="M7.8 12.3l2.8 2.8 5.6-6" fill="none" stroke="var(--bg-list)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
   };
 
   function makeFolderItem({ id, name, icon, count, kind }) {
@@ -355,21 +514,26 @@
   function sortNotes(list, isTrash) {
     if (isTrash) return list.sort((a, b) => (b.trashedAt || b.updatedAt) - (a.trashedAt || a.updatedAt));
     return list.sort((a, b) => {
-      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-      return (b.updatedAt || 0) - (a.updatedAt || 0);
+      const wa = noteWeight(a), wb = noteWeight(b);
+      if (wa !== wb) return wb - wa;                    // 权重高的在前
+      return (b.updatedAt || 0) - (a.updatedAt || 0);   // 同权重按修改时间新→旧
     });
   }
 
   function makeNoteItem(note) {
     const m = deriveMeta(note);
+    const st = noteStatus(note);
     const div = document.createElement('div');
-    div.className = 'note-item' + (note.id === view.noteId ? ' active' : '') + (note.pinned ? ' pinned' : '');
+    div.className = 'note-item' + (note.id === view.noteId ? ' active' : '') + (note.pinned ? ' pinned' : '') +
+      (st ? ' st-' + st : '');
     div.dataset.id = note.id;
     if (!note.trashed) div.setAttribute('draggable', 'true'); // 可拖到左侧文件夹归类
 
     const title = document.createElement('div');
     title.className = 'ni-title';
-    title.innerHTML = `<span class="ni-pin">${ICON.pinSmall}</span>`;
+    // 状态图标放在标题文字之前 —— 标题文字必须是最后一个 span，打字时会就地更新它
+    title.innerHTML = `<span class="ni-pin">${ICON.pinSmall}</span>` +
+      (st ? `<span class="ni-status" title="${STATUS_META[st].label}">${ICON[st]}</span>` : '');
     const tSpan = document.createElement('span');
     tSpan.textContent = m.title || '新建备忘录';
     title.appendChild(tSpan);
@@ -409,21 +573,33 @@
       return;
     }
 
-    const pinned = list.filter((n) => n.pinned && !isTrash);
-    const rest = list.filter((n) => !(n.pinned && !isTrash));
-
-    if (pinned.length) {
-      noteListEl.appendChild(groupLabel('置顶'));
-      pinned.forEach((n) => noteListEl.appendChild(makeNoteItem(n)));
-      if (rest.length) noteListEl.appendChild(groupLabel('备忘录'));
+    // 回收站不分组
+    if (isTrash) {
+      list.forEach((n) => noteListEl.appendChild(makeNoteItem(n)));
+      return;
     }
-    rest.forEach((n) => noteListEl.appendChild(makeNoteItem(n)));
+
+    // 按权重分四组，顺序即权重高低
+    const groups = [
+      { label: '置顶', kind: 'pinned', items: list.filter((n) => n.pinned) },
+      { label: '进行中', kind: 'doing', items: list.filter((n) => !n.pinned && noteStatus(n) === 'doing') },
+      { label: '已完成', kind: 'done', items: list.filter((n) => !n.pinned && noteStatus(n) === 'done') },
+      { label: '备忘录', kind: 'plain', items: list.filter((n) => !n.pinned && !noteStatus(n)) }
+    ].filter((g) => g.items.length);
+
+    // 只有"备忘录"一组时不显示标题（跟以前一样干净）
+    const showLabels = groups.length > 1 || groups[0].kind !== 'plain';
+    groups.forEach((g) => {
+      if (showLabels) noteListEl.appendChild(groupLabel(g.label, g.kind));
+      g.items.forEach((n) => noteListEl.appendChild(makeNoteItem(n)));
+    });
   }
 
-  function groupLabel(text) {
+  function groupLabel(text, kind) {
     const el = document.createElement('div');
-    el.className = 'note-list-group-label';
-    el.textContent = text;
+    el.className = 'note-list-group-label' + (kind ? ' gl-' + kind : '');
+    if (kind === 'doing' || kind === 'done') el.innerHTML = `<span class="gl-ico">${ICON[kind]}</span>`;
+    el.appendChild(document.createTextNode(text));
     return el;
   }
 
@@ -442,8 +618,8 @@
     const isTrash = !!note.trashed;
     Editor.el.contentEditable = isTrash ? 'false' : 'true';
     toolbar.querySelectorAll('.tb-btn').forEach((b) => {
-      // 删除、立即同步始终可用（同步按钮任何时候都能点，包括在回收站里）
-      if (b.dataset.cmd === 'delete' || b.dataset.cmd === 'sync-now') b.disabled = false;
+      // 删除、立即同步、拉取始终可用（同步按钮任何时候都能点，包括在回收站里）
+      if (b.dataset.cmd === 'delete' || b.dataset.cmd === 'sync-now' || b.dataset.cmd === 'pull-now') b.disabled = false;
       else b.disabled = isTrash;
     });
     pinBtn.classList.toggle('active', !!note.pinned);
@@ -494,7 +670,8 @@
     if (!note || note.trashed) return;
     note.content = Editor.getHTML();
     note.updatedAt = now();
-    note.syncTs = now();
+    bumpSync(note);
+    lastTypeAt = now();
     pendingSync.add(note.id);
     // 就地更新列表项的标题 / 摘要 / 日期，避免打字时列表跳动
     const item = noteListEl.querySelector(`.note-item[data-id="${note.id}"]`);
@@ -515,7 +692,7 @@
     const note = {
       id: genId('n'), folderId, content: '<div><br></div>',
       pinned: false, trashed: false,
-      createdAt: now(), updatedAt: now(), syncTs: now()
+      createdAt: now(), updatedAt: now(), syncTs: now(), syncBase: now(), syncSrc: myId()
     };
     data.notes.unshift(note);
     pendingSync.add(note.id);
@@ -533,7 +710,7 @@
   }
 
   function newFolder() {
-    const folder = { id: genId('f'), name: '新建文件夹', createdAt: now(), updatedAt: now(), syncTs: now() };
+    const folder = { id: genId('f'), name: '新建文件夹', createdAt: now(), updatedAt: now(), syncTs: now(), syncBase: now(), syncSrc: myId() };
     data.folders.push(folder);
     renderFolders();
     saveNow();
@@ -556,7 +733,7 @@
       const v = input.value.trim();
       folder.name = v || '未命名文件夹';
       folder.updatedAt = now();
-      folder.syncTs = now();
+      bumpSync(folder);
       renderFolders();
       if (view.folderId === id) renderNoteList();
       saveNow();
@@ -573,8 +750,8 @@
     const folder = findFolder(id);
     if (!folder) return;
     const affected = data.notes.filter((n) => n.folderId === id && !n.trashed && !n.deleted);
-    affected.forEach((n) => { n.trashed = true; n.trashedAt = now(); n.syncTs = now(); pendingSync.add(n.id); });
-    folder.deleted = true; folder.deletedAt = now(); folder.syncTs = now(); // 用墓碑标记，好同步删除
+    affected.forEach((n) => { n.trashed = true; n.trashedAt = now(); bumpSync(n); pendingSync.add(n.id); });
+    folder.deleted = true; folder.deletedAt = now(); bumpSync(folder); // 用墓碑标记，好同步删除
     if (view.folderId === id) {
       // 删的是当前正在看的文件夹 → 切回「所有备忘录」
       selectFolder(SPECIAL.ALL);
@@ -598,7 +775,7 @@
     if (!note) return;
     note.trashed = true;
     note.trashedAt = now();
-    note.syncTs = now();
+    bumpSync(note);
     pendingSync.add(id);
     afterRemoveFromView(id);
     saveNow();
@@ -610,7 +787,7 @@
     if (!note) return;
     note.trashed = false;
     note.trashedAt = null;
-    note.syncTs = now();
+    bumpSync(note);
     pendingSync.add(id);
     if (note.folderId && !findFolder(note.folderId)) note.folderId = null;
     afterRemoveFromView(id);
@@ -620,7 +797,7 @@
 
   function deleteForever(id) {
     const note = findNoteRaw(id);
-    if (note) { note.deleted = true; note.deletedAt = now(); note.syncTs = now(); note.content = ''; pendingSync.add(id); }
+    if (note) { note.deleted = true; note.deletedAt = now(); bumpSync(note); note.content = ''; pendingSync.add(id); }
     afterRemoveFromView(id);
     saveNow();
   }
@@ -642,7 +819,7 @@
     const note = findNote(id);
     if (!note) return;
     note.pinned = !note.pinned;
-    note.syncTs = now();   // 同步版本 bump（但不动 updatedAt，避免跳到列表顶部/显示错误修改时间）
+    bumpSync(note);        // 同步版本 bump（但不动 updatedAt，避免跳到列表顶部/显示错误修改时间）
     pendingSync.add(id);
     renderNoteList();
     if (id === view.noteId) pinBtn.classList.toggle('active', note.pinned);
@@ -650,11 +827,25 @@
     showToast(note.pinned ? '已置顶' : '已取消置顶');
   }
 
+  // 设置备忘录状态：'doing' 进行中 / 'done' 已完成 / '' 默认（三者单选）
+  function setNoteStatus(id, status) {
+    const note = findNote(id);
+    if (!note) return;
+    const next = STATUS_META[status] ? status : '';
+    if (noteStatus(note) === next) return;
+    note.status = next;    // 始终写明确的值（而不是删掉字段），这样"改回默认"也能同步给其它设备
+    bumpSync(note);        // 同步版本 bump（不动 updatedAt，避免改掉显示的修改时间）
+    pendingSync.add(id);
+    renderNoteList();
+    saveNow();
+    showToast(next ? ('已标记为「' + STATUS_META[next].label + '」') : '已恢复为默认状态');
+  }
+
   function moveNote(id, folderId) {
     const note = findNote(id);
     if (!note) return;
     note.folderId = folderId;
-    note.syncTs = now();   // 同步版本 bump（保留原 updatedAt）
+    bumpSync(note);        // 同步版本 bump（保留原 updatedAt）
     pendingSync.add(id);
     afterRemoveFromView(id);
     saveNow();
@@ -777,7 +968,20 @@
       }
       const b = document.createElement('button');
       if (it.danger) b.className = 'danger';
-      b.textContent = it.label;
+      // radio=true：单选项，当前生效的那个左边打勾（状态菜单用）
+      if (it.radio) {
+        b.classList.add('cm-radio');
+        const mark = document.createElement('span');
+        mark.className = 'cm-check' + (it.checked ? ' on' : '');
+        mark.textContent = '✓';
+        b.appendChild(mark);
+        // 图标位固定占宽（"默认"没有图标也留空位），三项文字才能对齐
+        const i = document.createElement('span');
+        i.className = 'cm-ico' + (it.ico ? ' cm-ico-' + it.ico : '');
+        if (it.ico) i.innerHTML = ICON[it.ico];
+        b.appendChild(i);
+      }
+      b.appendChild(document.createTextNode(it.label));
       b.addEventListener('click', () => { hideContextMenu(); it.onClick(); });
       contextMenu.appendChild(b);
     });
@@ -798,8 +1002,17 @@
         } }
       ];
     }
+    const st = noteStatus(note);
     const items = [
-      { label: note.pinned ? '取消置顶' : '置顶备忘录', onClick: () => togglePin(note.id) }
+      { label: note.pinned ? '取消置顶' : '置顶备忘录', onClick: () => togglePin(note.id) },
+      // 状态（单选）：进行中 / 已完成 / 默认，决定在列表里的排序权重
+      { sep: true },
+      { label: '进行中', radio: true, checked: st === 'doing', ico: 'doing',
+        onClick: () => setNoteStatus(note.id, 'doing') },
+      { label: '已完成', radio: true, checked: st === 'done', ico: 'done',
+        onClick: () => setNoteStatus(note.id, 'done') },
+      { label: '默认（无状态）', radio: true, checked: !st,
+        onClick: () => setNoteStatus(note.id, '') }
     ];
     // 移动到...
     const targets = [];
@@ -926,6 +1139,7 @@
     $('syncClose').addEventListener('click', closeSyncModal);
     $('syncToggle').addEventListener('click', toggleSync);
     $('syncForce').addEventListener('click', forceSyncFromHere);
+    $('syncPull').addEventListener('click', doPullNow);
     syncModal.addEventListener('click', (e) => { if (e.target === syncModal) closeSyncModal(); });
 
     // 拖动分隔线调整列表宽度（编辑区自动填充剩余空间）
@@ -981,6 +1195,11 @@
       await insertImageFiles(Array.from(imageInput.files));
       imageInput.value = '';
     });
+
+    // 离开输入状态（编辑器失焦 / 窗口切走）→ 立刻把打字期间攒下的对端版本合并进来
+    Editor.el.addEventListener('blur', () => flushDeferred());
+    window.addEventListener('blur', () => flushDeferred());
+    window.addEventListener('focus', () => flushDeferred());
 
     // 编辑器焦点/选区 → 更新工具栏、列表焦点态
     Editor.el.addEventListener('focus', () => listPaneEl.classList.remove('focused'));
@@ -1121,6 +1340,7 @@
       case 'pin': if (view.noteId) togglePin(view.noteId); return;
       case 'delete': handleDeleteCurrent(); return;
       case 'sync-now': doForceSync(false); return;
+      case 'pull-now': doPullNow(); return;
     }
     updateToolbarState();
   }
@@ -1155,7 +1375,7 @@
     // 回收站里超过保留期的 → 转成删除墓碑（这样删除也能同步到其它设备）
     data.notes.forEach((n) => {
       if (n.trashed && !n.deleted && n.trashedAt && n.trashedAt < trashCutoff) {
-        n.deleted = true; n.deletedAt = now(); n.syncTs = now(); n.content = '';
+        n.deleted = true; n.deletedAt = now(); bumpSync(n); n.content = '';
         pendingSync.add(n.id); changed = true;
       }
     });
@@ -1222,7 +1442,7 @@
     renderEditor();
 
     // 局域网同步：接入（若上次开着会自动开始）
-    Sync.init({ getData: () => data, applyIncoming: applyIncoming, onStatusChange: onSyncStatus });
+    Sync.init({ getData: () => data, applyIncoming: applyIncoming, onStatusChange: onSyncStatus, onPullDone: onPullDone });
     renderSyncStatus(Sync.getStatus());
   }
 

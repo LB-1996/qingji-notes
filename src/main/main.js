@@ -46,7 +46,10 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      spellcheck: true
+      spellcheck: true,
+      // 窗口在后台时不要限速定时器：同步场景里"另一台"通常就是后台窗口，
+      // 被节流会让它的保存/合并/拉取都变慢（Chromium 默认把定时器压到 1 秒一次）
+      backgroundThrottling: false
     }
   });
 
