@@ -352,6 +352,20 @@ body {
 }
 
 .note-item.dragging { opacity: 0.45; }
+/* 拖动排序时的插入位置指示线 */
+.note-item.drop-before::before,
+.note-item.drop-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent-strong);
+  box-shadow: 0 0 0 2px rgba(242, 183, 5, 0.22);
+}
+.note-item.drop-before::before { top: -2px; }
+.note-item.drop-after::after { bottom: -2px; }
 .note-item {
   padding: 10px 12px;
   border-radius: 9px;

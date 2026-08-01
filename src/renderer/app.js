@@ -19,6 +19,18 @@
     return m ? m.weight : 1;
   }
 
+  // ---------- 手动拖动排序（note.order，越小越靠前）----------
+  // 没拖过的笔记用 -updatedAt 当序号：既原样保留"最近修改的排前面"，
+  // 又和手动值落在同一数量级上，两者能直接比较、混排。
+  // 拖动时只取相邻两条的中点，因此一次拖动【只写被拖的那一条】——
+  // 否则整组笔记（含内嵌图片）都要重新广播一遍，同步开销会非常大。
+  const ORDER_STEP = 1e6;      // 放到首位/末位时与邻居拉开的间距
+  const ORDER_MIN_GAP = 1e-3;  // 相邻序号挤得太近就整组重排，防止浮点精度耗尽
+  const orderKey = (n) =>
+    (n && typeof n.order === 'number' && isFinite(n.order)) ? n.order : -((n && n.updatedAt) || 0);
+  // 一条笔记属于哪个分组（与列表分组、排序权重保持一致）
+  const groupKindOf = (n) => (n && n.pinned) ? 'pinned' : (noteStatus(n) || 'plain');
+
   let data = { version: 1, folders: [], notes: [] };
   const view = { folderId: SPECIAL.ALL, noteId: null, query: '' };
   let saveTimer = null;
@@ -522,7 +534,9 @@
     return list.sort((a, b) => {
       const wa = noteWeight(a), wb = noteWeight(b);
       if (wa !== wb) return wb - wa;                    // 权重高的在前
-      return (b.updatedAt || 0) - (a.updatedAt || 0);   // 同权重按修改时间新→旧
+      const oa = orderKey(a), ob = orderKey(b);
+      if (oa !== ob) return oa - ob;                    // 同权重按手动排序值，小的在前
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
     });
   }
 
@@ -700,6 +714,13 @@
       pinned: false, trashed: false,
       createdAt: now(), updatedAt: now(), syncTs: now(), syncBase: now(), syncSrc: myId()
     };
+    // 这一组里已经有人手动排过序 → 新笔记也给个明确序号，保证它照旧排在最前面。
+    // （没人拖过就不写 order，完全保持"按修改时间排"的老行为，零影响）
+    const peers = data.notes.filter((n) => !n.trashed && !n.deleted && groupKindOf(n) === groupKindOf(note));
+    if (peers.some((n) => typeof n.order === 'number')) {
+      const min = peers.reduce((m, n) => Math.min(m, orderKey(n)), -now());
+      note.order = min - ORDER_STEP;
+    }
     data.notes.unshift(note);
     pendingSync.add(note.id);
     if (view.folderId === SPECIAL.TRASH) view.folderId = SPECIAL.ALL;
@@ -845,6 +866,61 @@
     renderNoteList();
     saveNow();
     showToast(next ? ('已标记为「' + STATUS_META[next].label + '」') : '已恢复为默认状态');
+  }
+
+  // 把 dragId 拖到 targetId 的前面（before=true）或后面。
+  // 跨组拖动 = 加入那一组（拖进「进行中」就变进行中、拖进「置顶」就置顶），
+  // 否则松手后它会自己弹回原来的分组，很怪。
+  function reorderNote(dragId, targetId, before) {
+    const note = findNote(dragId);
+    const target = findNote(targetId);
+    if (!note || !target || note.id === target.id || note.trashed) return;
+
+    const kind = groupKindOf(target);
+    let changedGroup = false;
+    if (groupKindOf(note) !== kind) {
+      if (kind === 'pinned') note.pinned = true;       // 置顶是独立开关，保留原状态
+      else { note.pinned = false; note.status = (kind === 'doing' || kind === 'done') ? kind : ''; }
+      changedGroup = true;
+    }
+
+    // 目标组内、排除被拖那条之后的当前顺序
+    let seq = sortNotes(
+      notesInFolder(view.folderId).filter((n) => n.id !== dragId && groupKindOf(n) === kind), false);
+    let at = seq.findIndex((n) => n.id === targetId);
+    if (at < 0) return;
+    if (!before) at += 1;
+
+    let prev = seq[at - 1], next = seq[at];
+    // 中点插入用久了两侧会挤到浮点精度极限，这时才整组重排一次（少见）
+    if (prev && next && (orderKey(next) - orderKey(prev)) < ORDER_MIN_GAP) {
+      seq.forEach((n, i) => {
+        n.order = (i + 1) * ORDER_STEP;
+        bumpSync(n); pendingSync.add(n.id);
+      });
+      prev = seq[at - 1]; next = seq[at];
+    }
+    note.order = pickOrder(prev, next);
+
+    bumpSync(note);        // 不动 updatedAt：手动排个序不该改掉"修改时间"
+    pendingSync.add(dragId);
+    renderFolders();       // 跨组时文件夹计数不变，但状态图标要跟着刷新
+    renderNoteList();
+    saveNow();
+    if (changedGroup) {
+      showToast(kind === 'pinned' ? '已置顶' :
+        (STATUS_META[kind] ? '已标记为「' + STATUS_META[kind].label + '」' : '已恢复为默认状态'));
+    }
+  }
+
+  // 取相邻两条中间的序号；只有一侧邻居时往外让一个步长
+  function pickOrder(prev, next) {
+    const p = prev ? orderKey(prev) : null;
+    const n = next ? orderKey(next) : null;
+    if (p === null && n === null) return -now();       // 组里只剩它自己
+    if (p === null) return n - ORDER_STEP;             // 放到最前
+    if (n === null) return p + ORDER_STEP;             // 放到最后
+    return p + (n - p) / 2;
   }
 
   function moveNote(id, folderId) {
@@ -1076,9 +1152,17 @@
       if (note) showContextMenu(e.clientX, e.clientY, noteContextItems(note));
     });
 
-    // ---- 拖动笔记到左侧文件夹归类 ----
+    // ---- 拖动笔记：拖到左侧文件夹归类 / 在列表里上下拖动排序 ----
     let draggingNoteId = null;
+    let dropMark = null;   // { targetId, before } —— 当前要插入的位置
     const clearDropHints = () => folderListEl.querySelectorAll('.folder-item.drop-target').forEach((el) => el.classList.remove('drop-target'));
+    const clearInsertMark = () => {
+      noteListEl.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+      dropMark = null;
+    };
+    // 搜索中 / 回收站里不排序：看到的只是部分列表，算出来的位置没有意义
+    const canReorder = () => !view.query.trim() && view.folderId !== SPECIAL.TRASH;
+
     noteListEl.addEventListener('dragstart', (e) => {
       const item = e.target.closest('.note-item');
       if (!item) return;
@@ -1088,7 +1172,30 @@
     });
     noteListEl.addEventListener('dragend', (e) => {
       const item = e.target.closest('.note-item'); if (item) item.classList.remove('dragging');
-      draggingNoteId = null; clearDropHints();
+      draggingNoteId = null; clearDropHints(); clearInsertMark();
+    });
+    noteListEl.addEventListener('dragover', (e) => {
+      if (!draggingNoteId || !canReorder()) return;
+      const item = e.target.closest('.note-item');
+      if (!item || item.dataset.id === draggingNoteId) { clearInsertMark(); return; }
+      e.preventDefault();                                   // 不 preventDefault 就不会触发 drop
+      try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+      const r = item.getBoundingClientRect();
+      const before = (e.clientY - r.top) < r.height / 2;    // 落在上半部分=插到它前面
+      if (dropMark && dropMark.targetId === item.dataset.id && dropMark.before === before) return;
+      clearInsertMark();
+      item.classList.add(before ? 'drop-before' : 'drop-after');
+      dropMark = { targetId: item.dataset.id, before };
+    });
+    noteListEl.addEventListener('dragleave', (e) => {
+      if (!noteListEl.contains(e.relatedTarget)) clearInsertMark();
+    });
+    noteListEl.addEventListener('drop', (e) => {
+      const id = draggingNoteId, mark = dropMark;
+      draggingNoteId = null; clearInsertMark(); clearDropHints();
+      if (!id || !mark || !canReorder()) return;
+      e.preventDefault();
+      reorderNote(id, mark.targetId, mark.before);
     });
     folderListEl.addEventListener('dragover', (e) => {
       if (!draggingNoteId) return;
