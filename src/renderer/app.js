@@ -998,7 +998,12 @@
 
   // 插入前对大图降采样：图片以 base64 内联进笔记，若不限制体积，几张照片就能把
   // 单个数据文件撑到几十 MB，拖慢每次保存。小图保持原样，大图缩到最长边 MAX_IMG_DIM。
-  const MAX_IMG_DIM = 1600;
+  //
+  // 为什么是 1200：截图基本都是 PNG，而 PNG 要保留透明度、不能转 JPEG（转了文字边缘
+  // 会起毛刺，反而更糊），所以只能靠降尺寸瘦身。1200px 在编辑区显示约 530 CSS px，
+  // 2 倍屏下每个屏幕像素仍有 1.1 个图片像素（≥1 就不会被放大糊掉），肉眼看不出区别，
+  // 但像素数只有 1600px 时的 56%，体积差不多减半。
+  const MAX_IMG_DIM = 1200;
   async function processImage(file) {
     const dataUrl = await readFileAsDataURL(file);
     if (typeof dataUrl !== 'string' || dataUrl.length < 1500000) return dataUrl; // 小图直接用
