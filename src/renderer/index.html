@@ -168,9 +168,11 @@
   </div>
 
   <!-- 图片放大预览（灯箱）-->
-  <div class="lightbox" id="lightbox" hidden>
-    <button class="lightbox-close" id="lightboxClose" title="关闭">✕</button>
-    <img class="lightbox-img" id="lightboxImg" src="" alt="" />
+  <div class="lightbox" id="lightbox" tabindex="-1" hidden>
+    <button class="lightbox-close" id="lightboxClose" title="关闭 (Esc)">✕</button>
+    <div class="lightbox-zoom" id="lightboxZoom">100%</div>
+    <img class="lightbox-img" id="lightboxImg" src="" alt="" draggable="false" />
+    <div class="lightbox-hint" id="lightboxHint">滚轮缩放 · 放大后可拖动 · 双击复位 · Esc 关闭</div>
   </div>
 
   <script src="storage.js"></script>

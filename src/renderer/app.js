@@ -399,19 +399,84 @@
   }
   function closeSyncModal() { syncModal.hidden = true; }
 
-  // ---------- 图片放大预览（灯箱）----------
+  // ---------- 图片放大预览（灯箱）：滚轮缩放 + 拖动平移 ----------
+  const LB_MIN = 0.2, LB_MAX = 8;
+  let lbScale = 1, lbX = 0, lbY = 0;      // 缩放倍数 + 相对视口中心的位移
+  let lbDragging = false, lbMoved = false, lbFromX = 0, lbFromY = 0;
+  let lbCloseTimer = 0;
+
+  function lbApply(showBadge) {
+    const img = $('lightboxImg');
+    if (!img) return;
+    img.style.transform = `translate(${lbX}px, ${lbY}px) scale(${lbScale})`;
+    img.style.cursor = lbScale > 1 ? (lbDragging ? 'grabbing' : 'grab') : 'zoom-in';
+    const badge = $('lightboxZoom');
+    if (badge && showBadge !== false) {
+      badge.textContent = Math.round(lbScale * 100) + '%';
+      badge.classList.add('show');
+      clearTimeout(lbApply._t);
+      lbApply._t = setTimeout(() => badge.classList.remove('show'), 1000);
+    }
+  }
+  // 图片比视口大时不许把边缘拖进视口里面（否则会拖丢）；比视口小时锁在中间
+  function lbClampPan() {
+    const img = $('lightboxImg');
+    if (!img) return;
+    const r = img.getBoundingClientRect();
+    const maxX = Math.max(0, r.width / 2 - window.innerWidth / 2);
+    const maxY = Math.max(0, r.height / 2 - window.innerHeight / 2);
+    lbX = Math.max(-maxX, Math.min(maxX, lbX));
+    lbY = Math.max(-maxY, Math.min(maxY, lbY));
+  }
+  // 以光标所在的点为中心缩放 —— 鼠标指着哪儿就放大哪儿，比always居中缩放好用得多
+  function lbZoomAt(cx, cy, factor) {
+    const img = $('lightboxImg');
+    if (!img) return;
+    const next = Math.max(LB_MIN, Math.min(LB_MAX, lbScale * factor));
+    const f = next / lbScale;
+    if (Math.abs(f - 1) < 1e-4) return;
+    const r = img.getBoundingClientRect();
+    const centerX = r.left + r.width / 2, centerY = r.top + r.height / 2;
+    // 让光标下的那个图像点保持不动：新中心 = 光标 - (光标-旧中心) * 缩放比
+    lbX = cx - (cx - centerX) * f - (centerX - lbX);
+    lbY = cy - (cy - centerY) * f - (centerY - lbY);
+    lbScale = next;
+    if (lbScale <= 1.001) { lbScale = 1; lbX = 0; lbY = 0; }  // 回到 1 倍就归位
+    else lbClampPan();
+    lbApply();
+  }
+  function lbReset() {
+    lbScale = 1; lbX = 0; lbY = 0; lbDragging = false; lbMoved = false;
+    lbApply(false);
+    const badge = $('lightboxZoom');
+    if (badge) badge.classList.remove('show');
+  }
+
   function openLightbox(src) {
     if (!src) return;
     const box = $('lightbox');
     if (!box) return;
     $('lightboxImg').src = src;
     box.hidden = false;
+    clearTimeout(lbCloseTimer);
+    lbReset();
+    // 抢走焦点：否则编辑器还握着焦点，看图时敲键盘会直接把字打进笔记里
+    try { box.focus(); } catch (_) {}
+    const hint = $('lightboxHint');
+    if (hint) {   // 提示只在打开时露一下，两秒后淡出，别一直挡着
+      hint.classList.add('show');
+      clearTimeout(openLightbox._t);
+      openLightbox._t = setTimeout(() => hint.classList.remove('show'), 2200);
+    }
     try { window.getSelection().removeAllRanges(); } catch (_) {}
   }
   function closeLightbox() {
+    clearTimeout(lbCloseTimer);
     const box = $('lightbox');
     if (box) { box.hidden = true; $('lightboxImg').src = ''; }
+    lbReset();
   }
+  const lightboxOpen = () => { const b = $('lightbox'); return !!b && !b.hidden; };
 
   function toggleSync() {
     if (!Sync.available()) { showToast('请在桌面应用中使用'); return; }
@@ -1479,10 +1544,66 @@
       if (!contextMenu.hidden && !contextMenu.contains(e.target)) hideContextMenu();
       if (!formatPopover.hidden && !formatPopover.contains(e.target) && !e.target.closest('[data-cmd="format"]')) hidePopover();
     });
-    // 点击灯箱任意处关闭
+    // ---- 灯箱：滚轮缩放 / 拖动平移 / 双击复位 / 点背景关闭 ----
     const lb = $('lightbox');
-    if (lb) lb.addEventListener('click', closeLightbox);
+    const lbImg = $('lightboxImg');
+    if (lb) {
+      // 滚轮缩放。触控板双指捏合在 Chromium 里也是 wheel + ctrlKey，一并走这里。
+      // passive:false 才能 preventDefault，否则会把整页滚动带起来。
+      lb.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const step = e.ctrlKey ? 0.01 : 0.0022;          // 捏合的 deltaY 粒度更细
+        lbZoomAt(e.clientX, e.clientY, Math.exp(-e.deltaY * step));
+      }, { passive: false });
+
+      // 放大后按住拖动平移
+      lbImg.addEventListener('mousedown', (e) => {
+        if (lbScale <= 1) return;
+        e.preventDefault();
+        lbDragging = true; lbMoved = false;
+        lbFromX = e.clientX - lbX; lbFromY = e.clientY - lbY;
+        lbApply(false);
+      });
+      window.addEventListener('mousemove', (e) => {
+        if (!lbDragging) return;
+        lbX = e.clientX - lbFromX; lbY = e.clientY - lbFromY;
+        lbMoved = true;
+        lbClampPan();
+        lbApply(false);
+      });
+      window.addEventListener('mouseup', () => {
+        if (!lbDragging) return;
+        lbDragging = false;
+        lbApply(false);
+        setTimeout(() => { lbMoved = false; }, 0);       // 让紧跟着的 click 知道刚才是在拖动
+      });
+
+      // 双击：在 1 倍和 2.5 倍之间切换（放大时以光标为中心）
+      lbImg.addEventListener('dblclick', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        clearTimeout(lbCloseTimer);                       // 撤销上一下 click 排的"关闭"
+        if (lbScale > 1) lbReset();
+        else lbZoomAt(e.clientX, e.clientY, 2.5);
+      });
+
+      lb.addEventListener('click', (e) => {
+        if (lbMoved) return;                              // 刚拖完，别误关
+        if (e.target !== lbImg) { closeLightbox(); return; }   // 点背景：立刻关
+        if (lbScale > 1) return;                          // 放大状态下点图片：在看图，不关
+        // 点图片本身仍沿用"点一下关掉"的老习惯，但要给双击留机会：
+        // 浏览器的事件顺序是 click → dblclick，直接关的话双击放大永远触发不了。
+        clearTimeout(lbCloseTimer);
+        lbCloseTimer = setTimeout(closeLightbox, 260);
+      });
+    }
     document.addEventListener('keydown', (e) => {
+      // 灯箱里的键盘缩放：+ / - / 0 复位
+      if (lightboxOpen() && !e.metaKey && !e.ctrlKey) {
+        const cx = window.innerWidth / 2, cy = window.innerHeight / 2;
+        if (e.key === '+' || e.key === '=') { e.preventDefault(); lbZoomAt(cx, cy, 1.25); return; }
+        if (e.key === '-' || e.key === '_') { e.preventDefault(); lbZoomAt(cx, cy, 1 / 1.25); return; }
+        if (e.key === '0') { e.preventDefault(); lbReset(); return; }
+      }
       if (e.key === 'Escape') { hideContextMenu(); hidePopover(); if (!syncModal.hidden) closeSyncModal(); if (lb && !lb.hidden) closeLightbox(); }
       // Ctrl/Cmd + \ 收起/展开边栏（Electron 与浏览器都可用，无菜单冲突）
       if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); toggleSidebar(); }
