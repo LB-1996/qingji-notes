@@ -34,6 +34,12 @@
   let data = { version: 1, folders: [], notes: [] };
   const view = { folderId: SPECIAL.ALL, noteId: null, query: '' };
   let saveTimer = null;
+  let lastSaveMs = 0;            // 上次落盘实际耗时，用来自适应调整保存间隔
+  // 编辑器里的内容还没写回 note.content。大笔记里每敲一个字都读一次 innerHTML
+  // 要序列化几 MB（含 base64 图片），所以改成打脏标记、到真正需要时再写回。
+  let editorDirty = false;
+  let editorNoteId = null;       // 编辑器当前装的是哪条笔记（保证 flush 写回正确的那条）
+  let metaTimer = null;
   const pendingSync = new Set(); // 待广播到其它设备的笔记 id
   // 打字过程中收到的对端版本先存这里，停手后自动合并 —— 绝不丢弃
   const deferred = new Map();    // noteId -> 对端版本
@@ -108,16 +114,22 @@
     return out;
   }
 
-  function deriveMeta(note) {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = note.content || '';
-    const text = extractText(tmp).replace(/ /g, ' ');
+  // 从一个已经存在的 DOM 节点上取标题/摘要。
+  // 打字时直接传编辑器本身 —— 省掉「把几 MB 的 content 重新 innerHTML 解析一遍」，
+  // 那一步还会连带重新解码内嵌的 base64 图片，是大笔记卡顿的主因之一。
+  function deriveMetaFromNode(node) {
+    const text = extractText(node).replace(/ /g, ' ');
     const lines = text.split('\n').map((s) => s.trim()).filter(Boolean);
     const title = lines[0] || '';
     let preview = lines.slice(1).join('  ');
-    if (!title && !preview && tmp.querySelector('img')) return { title: '图片', preview: '' };
-    if (!preview && tmp.querySelector('img')) preview = '图片';
+    if (!title && !preview && node.querySelector('img')) return { title: '图片', preview: '' };
+    if (!preview && node.querySelector('img')) preview = '图片';
     return { title, preview };
+  }
+  function deriveMeta(note) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = note.content || '';
+    return deriveMetaFromNode(tmp);
   }
 
   function notesInFolder(folderId) {
@@ -142,19 +154,39 @@
   }
 
   // ---------- 持久化 ----------
+  // 把编辑器里的内容写回 note.content。所有「会读到 content」或「会覆盖编辑器」的
+  // 地方都要先调它。按 editorNoteId 写回，所以什么时候调都不会串到别的笔记上。
+  function flushEditor() {
+    if (!editorDirty) return;
+    editorDirty = false;
+    const note = editorNoteId && findNoteRaw(editorNoteId);
+    if (note && !note.trashed && !note.deleted) note.content = Editor.getHTML();
+  }
+
+  // 整份数据十几 MB 时一次落盘要上百毫秒，打字期间每 400ms 来一发会明显卡。
+  // 按上次实际耗时自适应：数据小照旧 400ms，数据大自动放宽（最多 2 秒）。
+  // 切笔记 / 切文件夹 / 关窗都会立即落盘，所以放宽间隔不会丢内容。
+  function saveDelay() {
+    return Math.min(2000, Math.max(400, Math.round(lastSaveMs * 12)));
+  }
   function scheduleSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveNow, 400);
+    saveTimer = setTimeout(saveNow, saveDelay());
   }
   async function saveNow() {
     clearTimeout(saveTimer);
+    flushEditor();
+    // 先取出并清空「这一轮要广播的」，再去落盘。
+    // 落盘是 await，期间用户可能又敲了字：那些新改动属于下一轮，
+    // 不能被这一轮结束时的 clear() 顺手清掉（清掉就再也不会推送，只能等自动拉取补）。
+    // 同理广播要放在 await 之前，否则发出去的是 await 之前的旧内容。
+    const toSend = Array.from(pendingSync);
+    pendingSync.clear();
+    toSend.forEach((id) => { const n = findNoteRaw(id); if (n) Sync.broadcastNote(n); });
+    const t0 = performance.now();
     const res = await Storage.save(data);
+    lastSaveMs = performance.now() - t0;
     if (res && res.ok === false) showToast('保存失败，请检查磁盘空间');
-    // 把本次改动的笔记广播给其它设备
-    if (pendingSync.size) {
-      pendingSync.forEach((id) => { const n = findNoteRaw(id); if (n) Sync.broadcastNote(n); });
-      pendingSync.clear();
-    }
   }
 
   // ---------- 同步：版本戳 ----------
@@ -286,6 +318,7 @@
 
   // 返回本次合并改动了多少条（供「拉取」按钮提示"更新了 N 条"）
   function applyIncoming(payload) {
+    flushEditor();          // 先写回，否则用过期的 content 去比对会误判成"内容不同"
     const force = !!payload.force;
     const from = payload.from;
     // 记下当前这条笔记合并前的样子：只有它真的变了才重设编辑器内容，否则光标会被无端重置
@@ -625,14 +658,17 @@
 
   // ---------- 渲染：编辑器 ----------
   function renderEditor() {
+    flushEditor();          // 先把上一条还没写回的内容存好，再覆盖编辑器
     const note = findNote(view.noteId);
     if (!note) {
       editorPaneEl.classList.remove('has-note');
       Editor.setHTML('');
+      editorNoteId = null; editorDirty = false;
       return;
     }
     editorPaneEl.classList.add('has-note');
     Editor.setHTML(note.content || '');
+    editorNoteId = note.id; editorDirty = false;
     Editor.el.setAttribute('data-placeholder', '开始记录…');
 
     const isTrash = !!note.trashed;
@@ -688,21 +724,36 @@
   function onEditorChange() {
     const note = findNote(view.noteId);
     if (!note || note.trashed) return;
-    note.content = Editor.getHTML();
+    // 这里【不】读 innerHTML：大笔记每敲一个字都要序列化几 MB，是卡顿主因。只打脏标记。
+    editorDirty = true;
+    editorNoteId = note.id;
     note.updatedAt = now();
     bumpSync(note);
     lastTypeAt = now();
     pendingSync.add(note.id);
-    // 就地更新列表项的标题 / 摘要 / 日期，避免打字时列表跳动
-    const item = noteListEl.querySelector(`.note-item[data-id="${note.id}"]`);
-    if (item) {
-      const m = deriveMeta(note);
-      item.querySelector('.ni-title span:last-child').textContent = m.title || '新建备忘录';
-      item.querySelector('.ni-snippet').textContent = m.preview || '无其他文本';
-      item.querySelector('.ni-date').textContent = formatDate(note.updatedAt);
-    }
+    scheduleListMeta(note.id);   // 列表标题/摘要：防抖 + 直接读实时 DOM，不重新解析
     updateToolbarState();
     scheduleSave();
+  }
+
+  // 就地更新列表项的标题/摘要/日期，避免打字时整个列表重排跳动。
+  // 防抖 250ms：连续打字没必要每个字都算一遍。
+  function scheduleListMeta(id) {
+    clearTimeout(metaTimer);
+    metaTimer = setTimeout(() => updateListMeta(id), 250);
+  }
+  function updateListMeta(id) {
+    const note = findNoteRaw(id);
+    const item = noteListEl.querySelector(`.note-item[data-id="${id}"]`);
+    if (!note || !item) return;
+    // 正在编辑的这条直接读编辑器的实时 DOM，省掉重新解析 content
+    const m = (id === editorNoteId) ? deriveMetaFromNode(Editor.el) : deriveMeta(note);
+    const t = item.querySelector('.ni-title span:last-child');
+    const sn = item.querySelector('.ni-snippet');
+    const dt = item.querySelector('.ni-date');
+    if (t) t.textContent = m.title || '新建备忘录';
+    if (sn) sn.textContent = m.preview || '无其他文本';
+    if (dt) dt.textContent = formatDate(note.updatedAt);
   }
 
   // ---------- 增删改 ----------
@@ -1310,7 +1361,12 @@
     });
 
     // 离开输入状态（编辑器失焦 / 窗口切走）→ 立刻把打字期间攒下的对端版本合并进来
-    Editor.el.addEventListener('blur', () => flushDeferred());
+    Editor.el.addEventListener('blur', () => {
+      flushEditor();
+      clearTimeout(metaTimer);
+      if (editorNoteId) updateListMeta(editorNoteId);
+      flushDeferred();
+    });
     window.addEventListener('blur', () => flushDeferred());
     window.addEventListener('focus', () => flushDeferred());
 
@@ -1436,6 +1492,7 @@
     // 关闭前同步落盘，确保最后一次编辑不因异步 IPC 竞态丢失
     window.addEventListener('beforeunload', () => {
       clearTimeout(saveTimer);
+      flushEditor();        // 最后一次输入必须写回再落盘
       Storage.saveSync(data);
     });
   }
@@ -1555,7 +1612,7 @@
     renderEditor();
 
     // 局域网同步：接入（若上次开着会自动开始）
-    Sync.init({ getData: () => data, applyIncoming: applyIncoming, onStatusChange: onSyncStatus, onPullDone: onPullDone });
+    Sync.init({ getData: () => { flushEditor(); return data; }, applyIncoming: applyIncoming, onStatusChange: onSyncStatus, onPullDone: onPullDone });
     renderSyncStatus(Sync.getStatus());
   }
 
