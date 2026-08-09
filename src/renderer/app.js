@@ -1379,6 +1379,18 @@
     Editor.el.addEventListener('focus', () => listPaneEl.classList.remove('focused'));
     Editor.el.addEventListener('keyup', updateToolbarState);
     Editor.el.addEventListener('mouseup', updateToolbarState);
+    // 只听 keyup/mouseup 会漏掉一些选区变化，最典型的是：已经选中一段文字后，
+    // 再点进选区内部放光标 —— Chrome 把 mousedown 当成"可能要拖动选中文本"，
+    // 要到 mouseup【之后】才收起选区，于是 mouseup 时读到的还是旧选区，
+    // 工具栏高亮就不跟手了。改成选区一变就刷新，用 rAF 合并连续变化（拖选时每帧最多一次）。
+    let tbRaf = 0;
+    document.addEventListener('selectionchange', () => {
+      if (tbRaf) return;
+      tbRaf = requestAnimationFrame(() => {
+        tbRaf = 0;
+        if (document.activeElement === Editor.el) updateToolbarState();
+      });
+    });
 
     // 粘贴：图片 → 插入；富文本 → 清理内联样式后插入（避免把标题字号等带进来）
     Editor.el.addEventListener('paste', async (e) => {

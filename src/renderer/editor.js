@@ -37,10 +37,21 @@ const Editor = (() => {
     }
   }
 
+  // 「第一行=标题」和 h1/h2/h3 的加粗是纯 CSS 效果，但浏览器的 queryCommandState /
+  // execCommand('bold') 是按【计算样式】判断的，会把它们当成"已经加粗"：
+  // 于是光标一放到第一行或标题里，B 就一直亮着，点一下反而插入 font-weight:normal
+  // 把字变细。执行加粗前先临时中和这几条 CSS，浏览器就能判断对方向了。
+  function withoutCssBold(fn) {
+    el.classList.add('no-auto-bold');
+    void el.offsetHeight;              // 强制重算样式，保证下面读到的是中和后的结果
+    try { return fn(); } finally { el.classList.remove('no-auto-bold'); }
+  }
+
   function exec(cmd, value = null) {
     el.focus();
     restoreSelection();
-    document.execCommand(cmd, false, value);
+    if (cmd === 'bold') withoutCssBold(() => document.execCommand('bold', false, null));
+    else document.execCommand(cmd, false, value);
     saveSelection();
     onChange();
   }
@@ -87,12 +98,14 @@ const Editor = (() => {
     onChange();
   }
 
-  // 修正非法嵌套：execCommand 会产生 <p><ul>…</ul></p> / <h2><ul>…</ul></h2>，
-  // 保存-重载后会漂移（多出空行、清单被套进标题字号）。把列表移出这类块级包裹。
+  // 修正非法嵌套：execCommand 会产生 <div><ul>…</ul></div> / <p><ul>…</ul></p> /
+  // <h2><ul>…</ul></h2>，保存-重载后会漂移（多出空行、清单被套进标题字号）。
+  // DIV 必须算进来 —— 它是正文行的默认块级标签，在普通一行上点清单就会撞上，
+  // 而且那行如果是第一行，还会套上「第一行=标题」的 1.4em 加粗，清单会变成巨大的粗体。
   function normalizeLists() {
     Array.from(el.querySelectorAll('ul, ol')).forEach((list) => {
       let p = list.parentNode;
-      while (p && p !== el && /^(P|H1|H2|H3|H4)$/.test(p.nodeName)) {
+      while (p && p !== el && /^(P|DIV|H1|H2|H3|H4)$/.test(p.nodeName)) {
         p.parentNode.insertBefore(list, p.nextSibling);
         if (!p.textContent.trim() && !p.querySelector('img')) p.parentNode.removeChild(p);
         p = list.parentNode;
@@ -291,7 +304,7 @@ const Editor = (() => {
     if (list && list.nodeName === 'UL') listType = list.classList.contains('checklist') ? 'checklist' : 'bullet';
     else if (list && list.nodeName === 'OL') listType = 'numbered';
     return {
-      bold: safeState('bold'),
+      bold: boldState(),
       italic: safeState('italic'),
       underline: safeState('underline'),
       strike: safeState('strikeThrough'),
@@ -301,6 +314,21 @@ const Editor = (() => {
   }
   function safeState(cmd) {
     try { return document.queryCommandState(cmd); } catch (e) { return false; }
+  }
+
+  // 加粗状态只认「真的加粗标记」（b/strong 或内联 font-weight），不看计算样式 ——
+  // 否则第一行和标题的 CSS 加粗会让 B 按钮一直亮着。
+  // 走 DOM 向上找，不触发重排，打字时每次按键都要算也不会卡。
+  function boldState() {
+    let n = currentNode();
+    while (n && n !== el) {
+      const tag = n.nodeName;
+      if (tag === 'B' || tag === 'STRONG') return true;
+      const fw = n.style && n.style.fontWeight;
+      if (fw) return !(fw === 'normal' || fw === 'lighter' || (parseInt(fw, 10) > 0 && parseInt(fw, 10) < 600));
+      n = n.parentNode;
+    }
+    return false;
   }
 
   el.addEventListener('click', (e) => {

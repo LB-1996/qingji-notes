@@ -575,6 +575,12 @@ body {
   line-height: 1.35;
   margin: 0.05em 0 0.35em;
 }
+/* 执行「加粗」时临时中和上面这些纯 CSS 的加粗（第一行标题、h1~h3）。
+   否则浏览器按计算样式判断，会以为已经是粗体，点加粗反而把字变细。见 editor.js 的 withoutCssBold */
+.editor.no-auto-bold > :first-child:not(ul):not(ol),
+.editor.no-auto-bold h1,
+.editor.no-auto-bold h2,
+.editor.no-auto-bold h3 { font-weight: 400; }
 .editor p, .editor div { margin: 0.15em 0; }
 .editor ul, .editor ol { margin: 0.3em 0; padding-left: 1.6em; }
 .editor li { margin: 0.15em 0; }
