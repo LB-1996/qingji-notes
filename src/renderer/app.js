@@ -1061,37 +1061,99 @@
     });
   }
 
-  // 插入前对大图降采样：图片以 base64 内联进笔记，不限制的话几张 5K 截图就能把
-  // 数据文件撑到几十 MB。缩到最长边 MAX_IMG_DIM，本来就没超标的原样存。
-  //
-  // 为什么是 3000：主力场景是【密集 UI 截图】，而且图片会被拖出去用，所以存下来的
-  // 分辨率＝以后能拿到的分辨率，小字能不能读全看这个数。5K 屏(5120px)的截图实测：
-  //   1200px 小字完全糊掉读不出来(503KB) · 1600px 能读但发虚(788KB)
-  //   2400px 清晰锐利(1.4MB) · 3000px 更接近原图(2.2MB)
-  // 截图基本都是 PNG，而 PNG 要留透明度不能转 JPEG（转了文字边缘起毛刺反而更糊），
-  // 只能靠降尺寸瘦身。打字卡顿早已单独修掉（编辑器脏标记 + 自适应落盘间隔），
-  // 不再需要靠压缩图片来换流畅度，所以这里优先保画质。
-  const MAX_IMG_DIM = 3000;
+  // ============ 插入图片：按图片本身的特征自动选上限和格式 ============
+  // 不同类型的图对分辨率的敏感度差很远，一个固定值必然顾此失彼：
+  //   · 密集 UI 截图：小字全靠像素，压一点就读不出来 → 要高分辨率、要 PNG（JPEG 会让
+  //     文字边缘起毛刺）
+  //   · 照片 / 连续色调：压到 2000px 肉眼看不出，但存成 PNG 会大到离谱 → 低上限 + JPEG
+  // 实测这两类分得很开（相邻像素相同率 94% vs 2%，颜色数 117 vs 4663），可以自动判。
+  const IMG_CAP_UI = 3000;      // 界面/文字类：保画质
+  const IMG_CAP_PHOTO = 2000;   // 照片类：够看就行
+  const IMG_PNG_LIMIT = 3 * 1024 * 1024;  // PNG 超过这个大小就改用 JPEG（见下面兜底二）
+  const IMG_JPEG_Q = 0.92;
+
+  // 在【原始分辨率】上取多块 1:1 的小块统计。
+  // 注意不能先缩略再统计 —— 缩略会把平坦区和锐边都抹平，特征就没了。
+  // 多取几块并分散开，避免整块落在空白区上。
+  function analyzeImage(img) {
+    const P = 200;
+    const spots = [[.5,.5],[.25,.3],[.75,.7],[.5,.15],[.15,.6],[.85,.35],[.35,.8],[.65,.25]];
+    const c = document.createElement('canvas');
+    c.width = P; c.height = P;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    let flat = 0, tot = 0, alpha = false;
+    const colors = new Set();
+    try {
+      for (const [fx, fy] of spots) {
+        const w = Math.min(P, img.width), h = Math.min(P, img.height);
+        const sx = Math.max(0, Math.min(img.width - w, Math.round(img.width * fx - w / 2)));
+        const sy = Math.max(0, Math.min(img.height - h, Math.round(img.height * fy - h / 2)));
+        g.clearRect(0, 0, P, P);
+        g.drawImage(img, sx, sy, w, h, 0, 0, w, h);   // 1:1，不缩放
+        const d = g.getImageData(0, 0, w, h).data;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w - 1; x++) {
+          const i = (y * w + x) * 4;
+          if (d[i + 3] < 250) alpha = true;
+          const df = Math.abs(d[i] - d[i+4]) + Math.abs(d[i+1] - d[i+5]) + Math.abs(d[i+2] - d[i+6]);
+          if (df <= 6) flat++;                        // 和右邻居几乎一样 → 平坦（界面大色块）
+          tot++;
+          colors.add((d[i] >> 3 << 10) | (d[i+1] >> 3 << 5) | (d[i+2] >> 3));
+        }
+      }
+    } catch (e) { return null; }                      // 取样失败就走保守分支
+    return { flat: tot ? flat / tot : 1, colors: colors.size, alpha };
+  }
+
+  function drawScaled(img, cap) {
+    const scale = Math.min(1, cap / Math.max(img.width, img.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';               // 高质量重采样，小字更清楚
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
   async function processImage(file) {
     const dataUrl = await readFileAsDataURL(file);
     if (typeof dataUrl !== 'string') return dataUrl;
     return new Promise((resolve) => {
       const img = new Image();
-      img.onerror = () => resolve(dataUrl); // 解码失败就退回原图
+      img.onerror = () => resolve(dataUrl);           // 解码失败就退回原图
       img.onload = () => {
-        const scale = Math.min(1, MAX_IMG_DIM / Math.max(img.width, img.height));
-        if (scale >= 1) { resolve(dataUrl); return; }   // 没超标，原样存，一点不损失
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        ctx.imageSmoothingEnabled = true;
-        ctx.imageSmoothingQuality = 'high';             // 缩图用高质量重采样，小字更清楚
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const isPng = /^data:image\/png/.test(dataUrl); // PNG 保留透明度，其余转 JPEG 省体积
         try {
-          const out = canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.92);
-          // 重新编码偶尔反而更大（原图本身压得更好），那就别换，白白降画质不划算
+          const a = analyzeImage(img);
+          const srcIsPng = /^data:image\/png/.test(dataUrl);
+          // 判定偏保守：只有【明显像照片】才降档，其余一律按界面截图保画质。
+          // 判错方向也只是文件大一点，不会把小字压糊。
+          const hasAlpha = !!(a && a.alpha);
+          const isPhoto = !!a && !hasAlpha && a.colors >= 2500 && a.flat < 0.20;
+          const cap = isPhoto ? IMG_CAP_PHOTO : IMG_CAP_UI;
+
+          const needShrink = Math.max(img.width, img.height) > cap;
+          // 不透明的 PNG 大得离谱（平滑渐变、或照片被存成了 PNG）→ 就算尺寸没超标也要换 JPEG，
+          // 体积能差十几倍。这一条必须在"原样返回"之前判，否则会被捷径绕过去。
+          const pngTooBig = srcIsPng && !hasAlpha && dataUrl.length > IMG_PNG_LIMIT;
+          const photoAsPng = isPhoto && srcIsPng;
+
+          if (!needShrink && !pngTooBig && !photoAsPng) {
+            resolve(dataUrl); return;                 // 尺寸没超、格式也合适 → 原样存，零损失
+          }
+          const canvas = drawScaled(img, cap);
+          // 有透明必须 PNG；否则 PNG 源且不是照片才保持 PNG（保住文字边缘），其余走 JPEG
+          let usePng = hasAlpha || (srcIsPng && !isPhoto);
+          let out = canvas.toDataURL(usePng ? 'image/png' : 'image/jpeg', IMG_JPEG_Q);
+
+          // 兜底一：平滑渐变类的图又平坦又颜色少，会被判成"界面"，但存 PNG 大得离谱
+          //（实测一张 3000x3000 的渐变图：PNG 13.4MB vs JPEG 1.0MB）。
+          // 所以 PNG 结果过大且没有透明时，改用 JPEG 重编一次。
+          if (usePng && !hasAlpha && out.length > IMG_PNG_LIMIT) {
+            const jpg = canvas.toDataURL('image/jpeg', IMG_JPEG_Q);
+            if (jpg.length < out.length) { out = jpg; usePng = false; }
+          }
+          // 兜底二：重新编码反而比原图还大（原图本身压得更好），那就别换
           resolve(out.length < dataUrl.length ? out : dataUrl);
         } catch (e) { resolve(dataUrl); }
       };
