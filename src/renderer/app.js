@@ -1061,30 +1061,38 @@
     });
   }
 
-  // 插入前对大图降采样：图片以 base64 内联进笔记，若不限制体积，几张照片就能把
-  // 单个数据文件撑到几十 MB，拖慢每次保存。小图保持原样，大图缩到最长边 MAX_IMG_DIM。
+  // 插入前对大图降采样：图片以 base64 内联进笔记，不限制的话几张 5K 截图就能把
+  // 数据文件撑到几十 MB。缩到最长边 MAX_IMG_DIM，本来就没超标的原样存。
   //
-  // 为什么是 1200：截图基本都是 PNG，而 PNG 要保留透明度、不能转 JPEG（转了文字边缘
-  // 会起毛刺，反而更糊），所以只能靠降尺寸瘦身。1200px 在编辑区显示约 530 CSS px，
-  // 2 倍屏下每个屏幕像素仍有 1.1 个图片像素（≥1 就不会被放大糊掉），肉眼看不出区别，
-  // 但像素数只有 1600px 时的 56%，体积差不多减半。
-  const MAX_IMG_DIM = 1200;
+  // 为什么是 2400：主力场景是【密集 UI 截图】，而且图片会被拖出去用，所以存下来的
+  // 分辨率＝以后能拿到的分辨率，小字能不能读全看这个数。5K 屏(5120px)的截图实测：
+  //   1200px 小字完全糊掉读不出来 · 1600px 能读但发虚 · 2400px 清晰锐利
+  // 截图基本都是 PNG，而 PNG 要留透明度不能转 JPEG（转了文字边缘起毛刺反而更糊），
+  // 只能靠降尺寸瘦身。2400px 的 5K 截图约 1.4MB，可以接受；打字卡顿早已单独修掉
+  // （编辑器脏标记 + 自适应落盘间隔），不再需要靠压缩图片来换流畅度。
+  const MAX_IMG_DIM = 2400;
   async function processImage(file) {
     const dataUrl = await readFileAsDataURL(file);
-    if (typeof dataUrl !== 'string' || dataUrl.length < 1500000) return dataUrl; // 小图直接用
+    if (typeof dataUrl !== 'string') return dataUrl;
     return new Promise((resolve) => {
       const img = new Image();
       img.onerror = () => resolve(dataUrl); // 解码失败就退回原图
       img.onload = () => {
         const scale = Math.min(1, MAX_IMG_DIM / Math.max(img.width, img.height));
-        if (scale >= 1) { resolve(dataUrl); return; }
+        if (scale >= 1) { resolve(dataUrl); return; }   // 没超标，原样存，一点不损失
         const canvas = document.createElement('canvas');
         canvas.width = Math.round(img.width * scale);
         canvas.height = Math.round(img.height * scale);
-        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';             // 缩图用高质量重采样，小字更清楚
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
         const isPng = /^data:image\/png/.test(dataUrl); // PNG 保留透明度，其余转 JPEG 省体积
-        try { resolve(canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.85)); }
-        catch (e) { resolve(dataUrl); }
+        try {
+          const out = canvas.toDataURL(isPng ? 'image/png' : 'image/jpeg', 0.92);
+          // 重新编码偶尔反而更大（原图本身压得更好），那就别换，白白降画质不划算
+          resolve(out.length < dataUrl.length ? out : dataUrl);
+        } catch (e) { resolve(dataUrl); }
       };
       img.src = dataUrl;
     });
